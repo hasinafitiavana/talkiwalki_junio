@@ -2,7 +2,7 @@ package com.talkiwalki.junior.ui.screen
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,7 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -41,7 +40,7 @@ import com.talkiwalki.junior.ui.TalkieWalkieUiState
 import com.talkiwalki.junior.ui.theme.TalkiWalkiJuniorTheme
 
 @Composable
-fun CommunicationScreen(state: TalkieWalkieUiState, onPttDown: () -> Unit, onPttUp: () -> Unit, onLeave: () -> Unit) {
+fun CommunicationScreen(state: TalkieWalkieUiState, onTransmissionToggle: () -> Unit, onLeave: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(state.groupName, style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
@@ -55,10 +54,10 @@ fun CommunicationScreen(state: TalkieWalkieUiState, onPttDown: () -> Unit, onPtt
         Spacer(Modifier.height(8.dp))
         Column(modifier = Modifier.fillMaxWidth()) { state.participants.forEach { ParticipantRow(it) } }
         Spacer(Modifier.height(32.dp))
-        PushToTalkButton(isPressed = state.isPushToTalkPressed, onDown = onPttDown, onUp = onPttUp)
+        PushToTalkButton(isTransmitting = state.isPushToTalkPressed, onClick = onTransmissionToggle)
         Spacer(Modifier.height(12.dp))
-        Text(when { state.isPushToTalkPressed -> "Vous parlez…"; state.speakerId != null -> "Un participant parle"; else -> "Maintenir pour parler" }, style = MaterialTheme.typography.titleMedium)
-        Text("Audio local PCM — maintenez pour parler", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+        Text(when { state.isPushToTalkPressed -> "Vous parlez…"; state.speakerId != null -> "Un participant parle"; else -> "Appuyez pour parler" }, style = MaterialTheme.typography.titleMedium)
+        Text("Audio local PCM — lecture sur haut-parleur", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
         Button(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("Quitter le groupe") }
     }
@@ -74,7 +73,7 @@ private fun CommunicationScreenPreview() {
                 status = ConnectionStatus.CONNECTED,
                 participants = listOf(ParticipantUi("1", "Camille", true, true), ParticipantUi("2", "Noah"))
             ),
-            onPttDown = {}, onPttUp = {}, onLeave = {}
+            onTransmissionToggle = {}, onLeave = {}
         )
     }
 }
@@ -97,17 +96,13 @@ private fun CommunicationScreenPreview() {
     }
 }
 
-@Composable private fun PushToTalkButton(isPressed: Boolean, onDown: () -> Unit, onUp: () -> Unit) {
-    val scale = animateFloatAsState(if (isPressed) .94f else 1f, label = "pttScale")
+@Composable private fun PushToTalkButton(isTransmitting: Boolean, onClick: () -> Unit) {
+    val scale = animateFloatAsState(if (isTransmitting) .94f else 1f, label = "pttScale")
     Box(
-        modifier = Modifier.size(178.dp).scale(scale.value).background(if (isPressed) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.primary, CircleShape)
-            .semantics { role = Role.Button; contentDescription = "Maintenir pour parler" }
-            .pointerInput(Unit) {
-                detectTapGestures(onPress = {
-                    onDown()
-                    try { tryAwaitRelease() } finally { onUp() }
-                })
-            },
+        modifier = Modifier.size(178.dp).scale(scale.value)
+            .background(if (isTransmitting) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, CircleShape)
+            .semantics { role = Role.Button; contentDescription = if (isTransmitting) "Arrêter de parler" else "Parler" }
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
-    ) { Text("PARLER", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold) }
+    ) { Text(if (isTransmitting) "ARRÊTER" else "PARLER", color = if (isTransmitting) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold) }
 }

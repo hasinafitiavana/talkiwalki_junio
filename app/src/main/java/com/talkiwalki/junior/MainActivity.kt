@@ -21,7 +21,10 @@ class MainActivity : ComponentActivity() {
         object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                TalkieWalkieViewModel(discovery = NsdSessionDiscovery(applicationContext)) as T
+                TalkieWalkieViewModel(
+                    discovery = NsdSessionDiscovery(applicationContext),
+                    audioEngine = com.talkiwalki.junior.audio.PcmAudioEngine(applicationContext)
+                ) as T
         }
     }
     private val localNetworkPermission = registerForActivityResult(

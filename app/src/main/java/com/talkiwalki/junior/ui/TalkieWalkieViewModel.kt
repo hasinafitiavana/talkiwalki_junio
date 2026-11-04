@@ -17,11 +17,12 @@ import kotlinx.coroutines.Dispatchers
 
 class TalkieWalkieViewModel(
     private val sessionRepository: LocalSessionRepository = LocalSessionRepository(),
-    private val discovery: SessionDiscovery = NoopSessionDiscovery()
+    private val discovery: SessionDiscovery = NoopSessionDiscovery(),
+    audioEngine: PcmAudioEngine = PcmAudioEngine()
 ) : ViewModel() {
-    private val audioEngine = PcmAudioEngine()
+    private val audioEngine = audioEngine
     private var microphoneGranted = false
-    private var pttHeld = false
+    private var transmissionEnabled = false
     private val mutableUiState = MutableStateFlow(TalkieWalkieUiState())
     val uiState: StateFlow<TalkieWalkieUiState> = mutableUiState.asStateFlow()
 
@@ -42,12 +43,12 @@ class TalkieWalkieViewModel(
                         hostPort = if (connected) session.port else null,
                         selfId = session.selfId,
                         speakerId = session.speakerId,
-                        isPushToTalkPressed = pttHeld && session.speakerId == session.selfId,
+                        isPushToTalkPressed = transmissionEnabled && session.speakerId == session.selfId,
                         participants = session.participants.map { ParticipantUi(it.id, it.displayName, it.role == ParticipantRole.HOST, it.id == session.speakerId) },
                         errorMessage = session.error
                     )
                 }
-                val canTransmit = microphoneGranted && pttHeld && session.speakerId == session.selfId
+                val canTransmit = microphoneGranted && transmissionEnabled && session.speakerId == session.selfId
                 if (canTransmit) audioEngine.startCapture(sessionRepository::sendAudio) else audioEngine.stopCapture()
             }
         }
@@ -104,19 +105,20 @@ class TalkieWalkieViewModel(
         joinByManualAddress()
     }
 
-    fun setPushToTalkPressed(isPressed: Boolean) {
+    /** Starts or stops transmitting with one tap. */
+    fun toggleTransmission() {
         if (mutableUiState.value.status != ConnectionStatus.CONNECTED) return
-        pttHeld = isPressed
-        if (!isPressed) audioEngine.stopCapture()
+        transmissionEnabled = !transmissionEnabled
+        if (!transmissionEnabled) audioEngine.stopCapture()
         viewModelScope.launch(Dispatchers.IO) {
-            if (isPressed) sessionRepository.requestPtt() else sessionRepository.releasePtt()
-            mutableUiState.update { it.copy(isPushToTalkPressed = pttHeld && it.speakerId == it.selfId) }
+            if (transmissionEnabled) sessionRepository.requestPtt() else sessionRepository.releasePtt()
+            mutableUiState.update { it.copy(isPushToTalkPressed = transmissionEnabled && it.speakerId == it.selfId) }
         }
     }
 
     fun leaveGroup() {
         audioEngine.release()
-        pttHeld = false
+        transmissionEnabled = false
         discovery.stopAdvertising()
         discovery.stopDiscovery()
         viewModelScope.launch(Dispatchers.IO) { sessionRepository.close() }

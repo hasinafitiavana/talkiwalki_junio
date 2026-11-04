@@ -22,9 +22,9 @@ class TalkieWalkieViewModelTest {
         assertTrue(viewModel.uiState.value.errorMessage != null)
     }
 
-    @Test fun pushToTalk_isIgnoredWhenDisconnected() {
+    @Test fun transmissionToggle_isIgnoredWhenDisconnected() {
         val viewModel = TalkieWalkieViewModel()
-        viewModel.setPushToTalkPressed(true)
+        viewModel.toggleTransmission()
         assertFalse(viewModel.uiState.value.isPushToTalkPressed)
     }
 
