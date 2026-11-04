@@ -38,6 +38,8 @@ import com.talkiwalki.junior.ui.ConnectionStatus
 import com.talkiwalki.junior.ui.ParticipantUi
 import com.talkiwalki.junior.ui.TalkieWalkieUiState
 import com.talkiwalki.junior.ui.theme.TalkiWalkiJuniorTheme
+import com.talkiwalki.junior.network.QrGroupInvitation
+import com.talkiwalki.junior.ui.component.QrCode
 
 @Composable
 fun CommunicationScreen(state: TalkieWalkieUiState, onTransmissionToggle: () -> Unit, onLeave: () -> Unit) {
@@ -48,6 +50,14 @@ fun CommunicationScreen(state: TalkieWalkieUiState, onTransmissionToggle: () -> 
         state.hostAddress?.let { address ->
             Spacer(Modifier.height(8.dp))
             Text("Host : $address:${state.hostPort}", style = MaterialTheme.typography.bodyMedium)
+        }
+        if (state.participants.any { it.isHost && it.id == state.selfId } && state.hostAddress != null && state.hostPort != null) {
+            Spacer(Modifier.height(18.dp))
+            Text("Inviter avec le QR code", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            QrCode(QrGroupInvitation.create(state.hostAddress, state.hostPort))
+            Spacer(Modifier.height(6.dp))
+            Text("Les participants peuvent le scanner depuis l’écran Rejoindre.", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
         }
         Spacer(Modifier.height(22.dp))
         Text("${state.participants.size} participant${if (state.participants.size > 1) "s" else ""}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())

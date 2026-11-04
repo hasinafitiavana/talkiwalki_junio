@@ -10,6 +10,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.ComponentActivity
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -21,6 +26,8 @@ import com.talkiwalki.junior.ui.screen.JoinGroupScreen
 @Composable
 fun TalkieWalkieApp(viewModel: TalkieWalkieViewModel) {
     val state by viewModel.uiState.collectAsState()
+    val activity = LocalContext.current as? ComponentActivity
+    val scannerOptions = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
     BackHandler(enabled = state.destination != AppDestination.HOME) { viewModel.navigateBack() }
 
     Surface(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -28,7 +35,18 @@ fun TalkieWalkieApp(viewModel: TalkieWalkieViewModel) {
             when (destination) {
                 AppDestination.HOME -> HomeScreen(onCreateGroup = { viewModel.navigateTo(AppDestination.CREATE_GROUP) }, onJoinGroup = { viewModel.navigateTo(AppDestination.JOIN_GROUP) })
                 AppDestination.CREATE_GROUP -> CreateGroupScreen(state, viewModel::updateNickname, viewModel::updateGroupName, viewModel::createGroup, viewModel::navigateBack)
-                AppDestination.JOIN_GROUP -> JoinGroupScreen(state, viewModel::updateNickname, viewModel::joinDiscoveredGroup, viewModel::updateManualAddress, viewModel::joinByManualAddress, viewModel::navigateBack)
+                AppDestination.JOIN_GROUP -> JoinGroupScreen(
+                    state, viewModel::updateNickname, viewModel::joinDiscoveredGroup,
+                    onScanQr = {
+                        activity?.let { host ->
+                            GmsBarcodeScanning.getClient(host, scannerOptions).startScan()
+                                .addOnSuccessListener { barcode -> barcode.rawValue?.let(viewModel::joinByQrCode) }
+                        }
+                    },
+                    onAddressChange = viewModel::updateManualAddress,
+                    onManualJoin = viewModel::joinByManualAddress,
+                    onBack = viewModel::navigateBack
+                )
                 AppDestination.COMMUNICATION -> CommunicationScreen(state, viewModel::toggleTransmission, viewModel::leaveGroup)
             }
         }

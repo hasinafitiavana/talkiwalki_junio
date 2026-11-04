@@ -44,7 +44,7 @@ fun CreateGroupScreen(state: TalkieWalkieUiState, onNicknameChange: (String) -> 
 }
 
 @Composable
-fun JoinGroupScreen(state: TalkieWalkieUiState, onNicknameChange: (String) -> Unit, onJoinGroup: (DiscoveredGroup) -> Unit, onAddressChange: (String) -> Unit, onManualJoin: () -> Unit, onBack: () -> Unit) {
+fun JoinGroupScreen(state: TalkieWalkieUiState, onNicknameChange: (String) -> Unit, onJoinGroup: (DiscoveredGroup) -> Unit, onScanQr: () -> Unit, onAddressChange: (String) -> Unit, onManualJoin: () -> Unit, onBack: () -> Unit) {
     FormScaffold("Rejoindre un groupe", onBack) {
         OutlinedTextField(state.nickname, onNicknameChange, Modifier.fillMaxWidth(), label = { Text("Votre pseudo") }, singleLine = true)
         Spacer(Modifier.height(18.dp))
@@ -66,6 +66,12 @@ fun JoinGroupScreen(state: TalkieWalkieUiState, onNicknameChange: (String) -> Un
         }
         if (state.isResolvingGroup) Text("Groupe détecté, connexion des informations…", style = MaterialTheme.typography.bodySmall)
         ErrorText(state.errorMessage)
+        Spacer(Modifier.height(20.dp))
+        Text("Connexion par QR code", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(8.dp))
+        Text("Scannez le QR code affiché sur le téléphone qui a créé le groupe.")
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = onScanQr, modifier = Modifier.fillMaxWidth(), enabled = state.status != ConnectionStatus.CONNECTING) { Text("Scanner le QR code") }
         Spacer(Modifier.height(20.dp))
         Text("Connexion manuelle", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(8.dp))
@@ -90,7 +96,7 @@ private fun JoinGroupScreenPreview() {
     TalkiWalkiJuniorTheme {
         JoinGroupScreen(
             state = TalkieWalkieUiState(nickname = "Lina"),
-            onNicknameChange = {}, onJoinGroup = {}, onAddressChange = {}, onManualJoin = {}, onBack = {}
+            onNicknameChange = {}, onJoinGroup = {}, onScanQr = {}, onAddressChange = {}, onManualJoin = {}, onBack = {}
         )
     }
 }

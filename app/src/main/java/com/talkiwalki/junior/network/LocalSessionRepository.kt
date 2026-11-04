@@ -264,18 +264,30 @@ class LocalSessionRepository(
     }
     private fun relayUdp(bytes: ByteArray, sender: String) { val socket = udpSocket ?: return; udpPeers.filterKeys { it != sender }.values.forEach { target -> runCatching { socket.send(DatagramPacket(bytes, bytes.size, target)) } } }
 
-    suspend fun requestPtt() = lock.withLock {
-        if (isHost) {
-            if (pttArbiter.request(hostId)) broadcastPttState()
-            stateFlow.value.speakerId == hostId
-        } else {
-            clientWriter?.let { send(it, LocalProtocol.PttRequest) }
-            false
+    /**
+     * PTT writes to the TCP control socket. Keep the dispatcher boundary here so
+     * this method remains safe if a UI caller accidentally invokes it on Main.
+     */
+    suspend fun requestPtt(): Boolean = withContext(dispatchers.io) {
+        lock.withLock {
+            if (isHost) {
+                if (pttArbiter.request(hostId)) broadcastPttState()
+                stateFlow.value.speakerId == hostId
+            } else {
+                clientWriter?.let { send(it, LocalProtocol.PttRequest) }
+                false
+            }
         }
     }
 
-    suspend fun releasePtt() = lock.withLock {
-        if (isHost) { if (pttArbiter.release(hostId)) broadcastPttState() } else clientWriter?.let { send(it, LocalProtocol.PttRelease) }
+    suspend fun releasePtt() = withContext(dispatchers.io) {
+        lock.withLock {
+            if (isHost) {
+                if (pttArbiter.release(hostId)) broadcastPttState()
+            } else {
+                clientWriter?.let { send(it, LocalProtocol.PttRelease) }
+            }
+        }
     }
 
     private suspend fun handlePttRequest(id: String) {

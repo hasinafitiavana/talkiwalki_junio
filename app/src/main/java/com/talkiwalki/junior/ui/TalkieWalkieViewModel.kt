@@ -6,6 +6,7 @@ import com.talkiwalki.junior.domain.model.ParticipantRole
 import com.talkiwalki.junior.network.LocalSessionRepository
 import com.talkiwalki.junior.network.NoopSessionDiscovery
 import com.talkiwalki.junior.network.SessionDiscovery
+import com.talkiwalki.junior.network.QrGroupInvitation
 import com.talkiwalki.junior.audio.PcmAudioEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -102,6 +103,13 @@ class TalkieWalkieViewModel(
 
     fun joinDiscoveredGroup(group: com.talkiwalki.junior.network.DiscoveredGroup) {
         updateManualAddress("${group.host}:${group.port}")
+        joinByManualAddress()
+    }
+
+    fun joinByQrCode(content: String) {
+        val address = QrGroupInvitation.parse(content)
+            ?: return showError("Ce QR code n’est pas une invitation TalkiWalki Junior valide.")
+        updateManualAddress(address)
         joinByManualAddress()
     }
 
