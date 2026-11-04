@@ -25,7 +25,9 @@ import com.talkiwalki.junior.ui.theme.TalkiWalkiJuniorTheme
 fun HomeScreen(onCreateGroup: () -> Unit, onJoinGroup: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(PaddingValues(horizontal = 28.dp, vertical = 40.dp)).widthIn(max = 480.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         TalkieWalkieMark()
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(12.dp))
+        Text("AMJ", style = androidx.compose.material3.MaterialTheme.typography.titleMedium, color = androidx.compose.material3.MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(16.dp))
         Text("TalkiWalki Junior", style = androidx.compose.material3.MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
         Text("Communiquez simplement, sans Internet", style = androidx.compose.material3.MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
