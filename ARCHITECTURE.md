@@ -32,6 +32,11 @@ address, sends heartbeats and closes with LEAVE. `network/protocol` uses
 versioned, line-delimited UTF-8 frames with an 8 KiB maximum; individual text
 fields use URL-safe Base64 so delimiters cannot corrupt frames.
 
+Audio is foreground-only PCM: mono 16-bit 16 kHz frames from `AudioRecord` are
+sent by UDP to the Host and relayed to registered clients. TCP remains the
+authority for PTT leases and UDP endpoint registration. The Host validates the
+source address, participant id and active PTT lease before relaying a packet.
+
 NSD discovery holds a Wi-Fi multicast lock only while actively discovering and
 always releases it on stop/failure. Service resolutions are serialized because
 some Android/OEM NSD implementations reject or destabilize concurrent resolve

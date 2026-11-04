@@ -23,3 +23,11 @@ uniquement pendant la recherche, et les résolutions sont sérialisées. Cette
 correction cible les appareils/routeurs où les paquets mDNS sont filtrés sans
 verrou ou où des résolutions parallèles échouent. Les diagnostics sont visibles
 avec le tag Logcat `TalkiWalkiNSD`.
+
+## Étape 4 — audio PTT
+
+PCM voix (16 kHz, mono, 16 bits) est utilisé volontairement à la place d’Opus,
+afin d’éviter une dépendance native à ce stade. Le Host arbitre le droit de
+parole par TCP et relaie les paquets UDP uniquement pour le locuteur autorisé.
+Le microphone est utilisé uniquement après attribution du droit PTT et arrêté
+immédiatement au relâchement. L’audio n’est ni enregistré ni actif en arrière-plan.

@@ -27,6 +27,9 @@ class MainActivity : ComponentActivity() {
     private val localNetworkPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* The UI reports a connection error if the permission is declined. */ }
+    private val microphonePermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> viewModel.onMicrophonePermissionResult(granted) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,6 +37,8 @@ class MainActivity : ComponentActivity() {
         if (android.os.Build.VERSION.SDK_INT >= 37 && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
             localNetworkPermission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
         }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) viewModel.onMicrophonePermissionResult(true)
+        else microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
         setContent {
             TalkiWalkiJuniorTheme {
                 TalkieWalkieApp(viewModel = viewModel)

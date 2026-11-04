@@ -57,8 +57,8 @@ fun CommunicationScreen(state: TalkieWalkieUiState, onPttDown: () -> Unit, onPtt
         Spacer(Modifier.height(32.dp))
         PushToTalkButton(isPressed = state.isPushToTalkPressed, onDown = onPttDown, onUp = onPttUp)
         Spacer(Modifier.height(12.dp))
-        Text(if (state.isPushToTalkPressed) "Vous parlez…" else "Maintenir pour parler", style = MaterialTheme.typography.titleMedium)
-        Text("Simulation visuelle — microphone inactif", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+        Text(when { state.isPushToTalkPressed -> "Vous parlez…"; state.speakerId != null -> "Un participant parle"; else -> "Maintenir pour parler" }, style = MaterialTheme.typography.titleMedium)
+        Text("Audio local PCM — maintenez pour parler", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
         Button(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("Quitter le groupe") }
     }

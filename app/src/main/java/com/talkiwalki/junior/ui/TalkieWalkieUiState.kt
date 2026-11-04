@@ -29,6 +29,8 @@ data class TalkieWalkieUiState(
     val participants: List<ParticipantUi> = emptyList(),
     val hostAddress: String? = null,
     val hostPort: Int? = null,
+    val speakerId: String? = null,
+    val selfId: String? = null,
     val isPushToTalkPressed: Boolean = false,
     val errorMessage: String? = null
 )
