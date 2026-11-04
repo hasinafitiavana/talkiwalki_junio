@@ -11,6 +11,7 @@ import android.media.MediaRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -22,6 +23,9 @@ class PcmAudioEngine(
     private var recorder: AudioRecord? = null
     private var captureJob: Job? = null
     private var player: AudioTrack? = null
+    private val mixLock = Any()
+    private val pendingFrames = mutableListOf<ByteArray>()
+    private var mixJob: Job? = null
     private val audioManager = context?.getSystemService(AudioManager::class.java)
     private var previousAudioMode: Int? = null
     private var audioRouteConfigured = false
@@ -45,13 +49,25 @@ class PcmAudioEngine(
 
     fun stopCapture() { captureJob?.cancel(); captureJob = null; recorder?.let { runCatching { it.stop() }; it.release() }; recorder = null }
     fun play(frame: ByteArray) {
-        routeToSpeaker()
-        val track = player ?: createPlayer().also { player = it }
-        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
-        track.write(frame, 0, frame.size, AudioTrack.WRITE_NON_BLOCKING)
+        synchronized(mixLock) {
+            pendingFrames += frame
+            if (mixJob == null) {
+                // Frames from active peers are normally received within this
+                // short window; mix them instead of queueing one after another.
+                mixJob = scope.launch {
+                    delay(MIX_WINDOW_MS)
+                    val frames = synchronized(mixLock) {
+                        mixJob = null
+                        pendingFrames.toList().also { pendingFrames.clear() }
+                    }
+                    writeToSpeaker(mix(frames))
+                }
+            }
+        }
     }
     fun release() {
         stopCapture()
+        synchronized(mixLock) { mixJob?.cancel(); mixJob = null; pendingFrames.clear() }
         player?.let { runCatching { it.stop() }; it.release() }
         player = null
         restoreAudioRoute()
@@ -87,5 +103,37 @@ class PcmAudioEngine(
         val min = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_OUT, ENCODING)
         return AudioTrack.Builder().setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()).setAudioFormat(AudioFormat.Builder().setSampleRate(SAMPLE_RATE).setEncoding(ENCODING).setChannelMask(CHANNEL_OUT).build()).setBufferSizeInBytes(maxOf(min * 2, FRAME_BYTES * 6)).setTransferMode(AudioTrack.MODE_STREAM).build()
     }
-    companion object { const val SAMPLE_RATE = 16_000; const val FRAME_BYTES = 640; private const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO; private const val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO; private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT }
+    private fun writeToSpeaker(frame: ByteArray) {
+        if (frame.isEmpty()) return
+        routeToSpeaker()
+        val track = player ?: createPlayer().also { player = it }
+        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
+        track.write(frame, 0, frame.size, AudioTrack.WRITE_NON_BLOCKING)
+    }
+
+    private fun mix(frames: List<ByteArray>): ByteArray {
+        if (frames.size == 1) return frames.first()
+        val output = ByteArray(frames.maxOfOrNull { it.size } ?: 0)
+        for (offset in output.indices step 2) {
+            var sum = 0
+            frames.forEach { frame ->
+                if (offset + 1 < frame.size) {
+                    sum += (frame[offset].toInt() and 0xff) or (frame[offset + 1].toInt() shl 8)
+                }
+            }
+            val sample = sum.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            output[offset] = sample.toByte()
+            if (offset + 1 < output.size) output[offset + 1] = (sample shr 8).toByte()
+        }
+        return output
+    }
+
+    companion object {
+        const val SAMPLE_RATE = 16_000
+        const val FRAME_BYTES = 640
+        private const val MIX_WINDOW_MS = 10L
+        private const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
+        private const val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO
+        private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
+    }
 }
