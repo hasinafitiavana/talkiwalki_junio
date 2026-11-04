@@ -2,19 +2,18 @@ package com.talkiwalki.junior.ui.screen
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -44,41 +43,60 @@ fun CreateGroupScreen(state: TalkieWalkieUiState, onNicknameChange: (String) -> 
 }
 
 @Composable
-fun JoinGroupScreen(state: TalkieWalkieUiState, onNicknameChange: (String) -> Unit, onJoinGroup: (DiscoveredGroup) -> Unit, onScanQr: () -> Unit, onAddressChange: (String) -> Unit, onManualJoin: () -> Unit, onBack: () -> Unit) {
+fun JoinGroupScreen(state: TalkieWalkieUiState, onNicknameChange: (String) -> Unit, onJoinGroup: (DiscoveredGroup) -> Unit, onRefreshGroups: () -> Unit, onScanQr: () -> Unit, onAddressChange: (String) -> Unit, onManualJoin: () -> Unit, onBack: () -> Unit) {
     FormScaffold("Rejoindre un groupe", onBack) {
         OutlinedTextField(state.nickname, onNicknameChange, Modifier.fillMaxWidth(), label = { Text("Votre pseudo") }, singleLine = true)
-        Spacer(Modifier.height(18.dp))
-        Text("Groupes détectés", style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(8.dp))
-        Text("Les téléphones doivent être connectés au même Wi‑Fi.", style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(8.dp))
-        when {
-            state.isDiscovering -> Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.height(22.dp)); Spacer(Modifier.width(8.dp)); Text("Recherche en cours…") }
-            state.discoveredGroups.isEmpty() -> Text("Aucun groupe détecté. Vérifiez le Wi‑Fi ou utilisez l’adresse IP.")
-            else -> state.discoveredGroups.forEach { group ->
-                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) { Text(group.groupName, style = MaterialTheme.typography.titleMedium); Text("${group.host}:${group.port}", style = MaterialTheme.typography.bodySmall) }
-                        OutlinedButton(onClick = { onJoinGroup(group) }, enabled = state.status != ConnectionStatus.CONNECTING) { Text("Rejoindre") }
+        Spacer(Modifier.height(20.dp))
+        JoinSectionCard(title = "Groupes sur ce Wi‑Fi") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Les téléphones doivent être sur le même réseau local.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                OutlinedButton(onClick = onRefreshGroups, enabled = state.status != ConnectionStatus.CONNECTING) { Text("Actualiser") }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (state.discoveredGroups.isEmpty() && state.isDiscovering) {
+                Text("Recherche réseau active.", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(8.dp))
+            }
+            if (state.discoveredGroups.isEmpty()) {
+                Text("Aucun groupe trouvé pour le moment.", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                state.discoveredGroups.forEach { group ->
+                    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(group.groupName, style = MaterialTheme.typography.titleMedium)
+                                Text(group.endpoint, style = MaterialTheme.typography.bodySmall)
+                            }
+                            OutlinedButton(onClick = { onJoinGroup(group) }, enabled = state.status != ConnectionStatus.CONNECTING) { Text("Rejoindre") }
+                        }
                     }
                 }
             }
+            if (state.isResolvingGroup) Text("Connexion aux informations d’un groupe…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
         }
-        if (state.isResolvingGroup) Text("Groupe détecté, connexion des informations…", style = MaterialTheme.typography.bodySmall)
-        ErrorText(state.errorMessage)
+        Spacer(Modifier.height(16.dp))
+        JoinSectionCard(title = "Avec un QR code") {
+            Text("Scannez le QR affiché par la personne qui a créé le groupe.", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onScanQr, modifier = Modifier.fillMaxWidth(), enabled = state.status != ConnectionStatus.CONNECTING) { Text("Scanner le QR code") }
+        }
         Spacer(Modifier.height(20.dp))
-        Text("Connexion par QR code", style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(8.dp))
-        Text("Scannez le QR code affiché sur le téléphone qui a créé le groupe.")
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onScanQr, modifier = Modifier.fillMaxWidth(), enabled = state.status != ConnectionStatus.CONNECTING) { Text("Scanner le QR code") }
-        Spacer(Modifier.height(20.dp))
-        Text("Connexion manuelle", style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(state.manualAddress, onAddressChange, Modifier.fillMaxWidth(), label = { Text("Adresse IP du Host") }, supportingText = { Text("Ex. 192.168.1.10 ou 192.168.1.10:49321") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onManualJoin, modifier = Modifier.fillMaxWidth(), enabled = state.status != ConnectionStatus.CONNECTING) { Text(if (state.status == ConnectionStatus.CONNECTING) "Connexion…" else "Se connecter") }
+        JoinSectionCard(title = "Adresse IP (secours)") {
+            OutlinedTextField(state.manualAddress, onAddressChange, Modifier.fillMaxWidth(), label = { Text("Adresse du groupe") }, supportingText = { Text("Ex. 192.168.1.10 ou 192.168.1.10:49321") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onManualJoin, modifier = Modifier.fillMaxWidth(), enabled = state.status != ConnectionStatus.CONNECTING) { Text(if (state.status == ConnectionStatus.CONNECTING) "Connexion…" else "Se connecter") }
+        }
         ErrorText(state.errorMessage)
+    }
+}
+
+@Composable private fun JoinSectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            content()
+        }
     }
 }
 
@@ -96,7 +114,7 @@ private fun JoinGroupScreenPreview() {
     TalkiWalkiJuniorTheme {
         JoinGroupScreen(
             state = TalkieWalkieUiState(nickname = "Lina"),
-            onNicknameChange = {}, onJoinGroup = {}, onScanQr = {}, onAddressChange = {}, onManualJoin = {}, onBack = {}
+            onNicknameChange = {}, onJoinGroup = {}, onRefreshGroups = {}, onScanQr = {}, onAddressChange = {}, onManualJoin = {}, onBack = {}
         )
     }
 }

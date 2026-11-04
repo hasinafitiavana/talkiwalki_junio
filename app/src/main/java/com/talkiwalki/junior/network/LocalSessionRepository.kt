@@ -313,11 +313,19 @@ class LocalSessionRepository(
 
     private fun fail(message: String) { stateFlow.value = stateFlow.value.copy(error = message) }
     private fun parseEndpoint(value: String): Pair<String, Int> {
-        val parts = value.trim().split(":", limit = 2)
-        require(parts[0].isNotBlank()) { "Adresse IP requise." }
-        val port = parts.getOrNull(1)?.toIntOrNull() ?: LocalProtocol.DEFAULT_PORT
+        val endpoint = value.trim()
+        val (address, explicitPort) = if (endpoint.startsWith("[")) {
+            val closingBracket = endpoint.indexOf(']')
+            require(closingBracket > 1 && endpoint.getOrNull(closingBracket + 1) == ':') { "Adresse IPv6 invalide." }
+            endpoint.substring(1, closingBracket) to endpoint.substring(closingBracket + 2)
+        } else {
+            val parts = endpoint.split(":", limit = 2)
+            parts[0] to parts.getOrNull(1)
+        }
+        require(address.isNotBlank()) { "Adresse IP requise." }
+        val port = explicitPort?.toIntOrNull() ?: LocalProtocol.DEFAULT_PORT
         require(port in 1..65535) { "Port invalide." }
-        return parts[0] to port
+        return address to port
     }
     private fun writer(socket: Socket) = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
     private fun reader(socket: Socket) = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))

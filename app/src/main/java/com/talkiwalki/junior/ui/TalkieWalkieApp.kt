@@ -37,6 +37,7 @@ fun TalkieWalkieApp(viewModel: TalkieWalkieViewModel) {
                 AppDestination.CREATE_GROUP -> CreateGroupScreen(state, viewModel::updateNickname, viewModel::updateGroupName, viewModel::createGroup, viewModel::navigateBack)
                 AppDestination.JOIN_GROUP -> JoinGroupScreen(
                     state, viewModel::updateNickname, viewModel::joinDiscoveredGroup,
+                    onRefreshGroups = viewModel::refreshDiscoveredGroups,
                     onScanQr = {
                         activity?.let { host ->
                             GmsBarcodeScanning.getClient(host, scannerOptions).startScan()

@@ -5,14 +5,17 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.util.Log
-import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.ArrayDeque
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class DiscoveredGroup(val serviceName: String, val groupName: String, val host: String, val port: Int)
+data class DiscoveredGroup(val serviceName: String, val groupName: String, val host: String, val port: Int) {
+    /** Ready to pass to a socket, including brackets required around IPv6 addresses. */
+    val endpoint: String get() = if (host.contains(':')) "[$host]:$port" else "$host:$port"
+}
 data class DiscoverySnapshot(
     val isSearching: Boolean = false,
     val groups: List<DiscoveredGroup> = emptyList(),
@@ -25,6 +28,7 @@ interface SessionDiscovery {
     fun advertise(groupName: String, port: Int)
     fun stopAdvertising()
     fun startDiscovery()
+    fun refreshDiscovery()
     fun stopDiscovery()
 }
 
@@ -33,6 +37,7 @@ class NoopSessionDiscovery : SessionDiscovery {
     override fun advertise(groupName: String, port: Int) = Unit
     override fun stopAdvertising() = Unit
     override fun startDiscovery() = Unit
+    override fun refreshDiscovery() = Unit
     override fun stopDiscovery() = Unit
 }
 
@@ -50,6 +55,7 @@ class NsdSessionDiscovery(context: Context) : SessionDiscovery {
     private var activeResolution: String? = null
     private var registration: NsdManager.RegistrationListener? = null
     private var discovery: NsdManager.DiscoveryListener? = null
+    private var restartDiscoveryAfterStop = false
     private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun advertise(groupName: String, port: Int) {
@@ -86,8 +92,25 @@ class NsdSessionDiscovery(context: Context) : SessionDiscovery {
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(regType: String) { Log.i(TAG, "Recherche NSD active : $regType") }
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) { Log.e(TAG, "Échec démarrage recherche NSD ($errorCode)"); discovery = null; releaseMulticastLock(); reportError("Recherche réseau impossible.") }
-            override fun onDiscoveryStopped(serviceType: String) { Log.i(TAG, "Recherche NSD arrêtée : $serviceType"); synchronized(monitor) { publishLocked(searching = false, error = null) } }
-            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) { Log.w(TAG, "Échec arrêt recherche NSD ($errorCode)"); discovery = null; releaseMulticastLock() }
+            override fun onDiscoveryStopped(serviceType: String) {
+                Log.i(TAG, "Recherche NSD arrêtée : $serviceType")
+                if (restartDiscoveryAfterStop) {
+                    restartDiscoveryAfterStop = false
+                    releaseMulticastLock()
+                    startDiscovery()
+                } else {
+                    synchronized(monitor) { publishLocked(searching = false, error = null) }
+                }
+            }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                Log.w(TAG, "Échec arrêt recherche NSD ($errorCode)")
+                discovery = null
+                releaseMulticastLock()
+                if (restartDiscoveryAfterStop) {
+                    restartDiscoveryAfterStop = false
+                    startDiscovery()
+                }
+            }
             override fun onServiceFound(service: NsdServiceInfo) {
                 Log.d(TAG, "Service NSD trouvé : ${service.serviceName}, type=${service.serviceType}")
                 if (sameServiceType(service.serviceType)) enqueueResolution(service)
@@ -105,10 +128,33 @@ class NsdSessionDiscovery(context: Context) : SessionDiscovery {
     override fun stopDiscovery() {
         val listener = discovery
         discovery = null
+        restartDiscoveryAfterStop = false
         listener?.let { runCatching { manager.stopServiceDiscovery(it) }.onFailure { error -> Log.w(TAG, "Exception arrêt recherche NSD", error) } }
         synchronized(monitor) { pending.clear(); pendingNames.clear(); activeResolution = null; discovered.clear(); mutableSnapshot.value = DiscoverySnapshot() }
         releaseMulticastLock()
         Log.i(TAG, "Recherche NSD nettoyée")
+    }
+
+    override fun refreshDiscovery() {
+        val listener = discovery
+        if (listener == null) {
+            startDiscovery()
+            return
+        }
+        // NsdManager rejects a new discovery while the previous callback has not
+        // received onDiscoveryStopped, so restart from that callback instead.
+        restartDiscoveryAfterStop = true
+        discovery = null
+        synchronized(monitor) {
+            pending.clear(); pendingNames.clear(); activeResolution = null; discovered.clear()
+            publishLocked(searching = false, error = null)
+        }
+        runCatching { manager.stopServiceDiscovery(listener) }
+            .onFailure { error ->
+                Log.w(TAG, "Impossible d’actualiser la recherche NSD", error)
+                restartDiscoveryAfterStop = false
+                startDiscovery()
+            }
     }
 
     private fun enqueueResolution(service: NsdServiceInfo) {
@@ -132,16 +178,16 @@ class NsdSessionDiscovery(context: Context) : SessionDiscovery {
                     completeResolution(info.serviceName, null)
                 }
                 override fun onServiceResolved(info: NsdServiceInfo) {
-                    val address = info.host as? Inet4Address
-                    if (address == null) {
-                        Log.w(TAG, "Résolution NSD sans IPv4 utilisable : ${info.serviceName}, host=${info.host}")
+                    val address = info.host as? InetAddress
+                    if (address == null || address.isLoopbackAddress) {
+                        Log.w(TAG, "Résolution NSD sans adresse utilisable : ${info.serviceName}, host=${info.host}")
                         completeResolution(info.serviceName, null)
                         return
                     }
                     val group = info.attributes["group"]?.toString(Charsets.UTF_8)
                         ?: info.serviceName.removePrefix("TWJ-").substringBeforeLast('-')
                     val resolved = if (info.port in 1..65535) DiscoveredGroup(info.serviceName, group, address.hostAddress, info.port) else null
-                    Log.i(TAG, "Résolution NSD réussie : ${info.serviceName} -> ${address.hostAddress}:${info.port}")
+                    Log.i(TAG, "Résolution NSD réussie : ${info.serviceName} -> ${resolved?.endpoint}")
                     completeResolution(info.serviceName, resolved)
                 }
             })

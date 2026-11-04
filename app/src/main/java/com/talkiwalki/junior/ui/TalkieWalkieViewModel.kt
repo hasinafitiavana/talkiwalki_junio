@@ -69,6 +69,7 @@ class TalkieWalkieViewModel(
     fun updateNickname(value: String) = mutableUiState.update { it.copy(nickname = value) }
     fun updateGroupName(value: String) = mutableUiState.update { it.copy(groupName = value) }
     fun updateManualAddress(value: String) = mutableUiState.update { it.copy(manualAddress = value) }
+    fun refreshDiscoveredGroups() = discovery.refreshDiscovery()
     fun onMicrophonePermissionResult(granted: Boolean) {
         microphoneGranted = granted
         if (!granted) showError("Autorisation microphone refusée.")
@@ -102,7 +103,7 @@ class TalkieWalkieViewModel(
     }
 
     fun joinDiscoveredGroup(group: com.talkiwalki.junior.network.DiscoveredGroup) {
-        updateManualAddress("${group.host}:${group.port}")
+        updateManualAddress(group.endpoint)
         joinByManualAddress()
     }
 

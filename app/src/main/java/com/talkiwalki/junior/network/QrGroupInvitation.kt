@@ -17,6 +17,7 @@ object QrGroupInvitation {
         }
         val host = parameters["host"]?.trim().orEmpty()
         val port = parameters["port"]?.toIntOrNull()
-        if (host.isBlank() || port == null || port !in 1..65535) null else "$host:$port"
+        if (host.isBlank() || port == null || port !in 1..65535) null
+        else if (host.contains(':')) "[$host]:$port" else "$host:$port"
     }.getOrNull()
 }
