@@ -11,10 +11,15 @@ import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
 import com.talkiwalki.junior.network.NsdSessionDiscovery
 import com.talkiwalki.junior.ui.TalkieWalkieApp
 import com.talkiwalki.junior.ui.TalkieWalkieViewModel
 import com.talkiwalki.junior.ui.theme.TalkiWalkiJuniorTheme
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: TalkieWalkieViewModel by viewModels {
@@ -42,6 +47,18 @@ class MainActivity : ComponentActivity() {
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) viewModel.onMicrophonePermissionResult(true)
         else microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiState.collectLatest { state ->
+                    val hasMicrophonePermission = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    if (state.destination == com.talkiwalki.junior.ui.AppDestination.COMMUNICATION && state.status == com.talkiwalki.junior.ui.ConnectionStatus.CONNECTED && hasMicrophonePermission) {
+                        ActiveSessionService.start(this@MainActivity)
+                    } else {
+                        ActiveSessionService.stop(this@MainActivity)
+                    }
+                }
+            }
+        }
         setContent {
             TalkiWalkiJuniorTheme {
                 TalkieWalkieApp(viewModel = viewModel)
