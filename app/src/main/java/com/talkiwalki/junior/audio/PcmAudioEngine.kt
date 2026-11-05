@@ -1,6 +1,8 @@
 package com.talkiwalki.junior.audio
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
@@ -8,14 +10,14 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.AudioManager
 import android.media.MediaRecorder
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** Foreground-only PCM voice engine. It stores no audio and owns no network socket. */
+/** PCM voice engine. It stores no audio and owns no network socket. */
 class PcmAudioEngine(
     private val context: Context? = null,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO)
@@ -23,14 +25,14 @@ class PcmAudioEngine(
     private var recorder: AudioRecord? = null
     private var captureJob: Job? = null
     private var player: AudioTrack? = null
-    private val mixLock = Any()
-    private val pendingFrames = mutableListOf<ByteArray>()
-    private var mixJob: Job? = null
     private val audioManager = context?.getSystemService(AudioManager::class.java)
     private var previousAudioMode: Int? = null
     private var audioRouteConfigured = false
 
     fun startCapture(onFrame: (ByteArray) -> Unit): Result<Unit> = runCatching {
+        if (context != null && ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            error("Autorisation microphone refusée.")
+        }
         routeToSpeaker()
         stopCapture()
         val min = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_IN, ENCODING)
@@ -49,25 +51,10 @@ class PcmAudioEngine(
 
     fun stopCapture() { captureJob?.cancel(); captureJob = null; recorder?.let { runCatching { it.stop() }; it.release() }; recorder = null }
     fun play(frame: ByteArray) {
-        synchronized(mixLock) {
-            pendingFrames += frame
-            if (mixJob == null) {
-                // Frames from active peers are normally received within this
-                // short window; mix them instead of queueing one after another.
-                mixJob = scope.launch {
-                    delay(MIX_WINDOW_MS)
-                    val frames = synchronized(mixLock) {
-                        mixJob = null
-                        pendingFrames.toList().also { pendingFrames.clear() }
-                    }
-                    writeToSpeaker(mix(frames))
-                }
-            }
-        }
+        writeToSpeaker(frame)
     }
     fun release() {
         stopCapture()
-        synchronized(mixLock) { mixJob?.cancel(); mixJob = null; pendingFrames.clear() }
         player?.let { runCatching { it.stop() }; it.release() }
         player = null
         restoreAudioRoute()
@@ -111,27 +98,9 @@ class PcmAudioEngine(
         track.write(frame, 0, frame.size, AudioTrack.WRITE_NON_BLOCKING)
     }
 
-    private fun mix(frames: List<ByteArray>): ByteArray {
-        if (frames.size == 1) return frames.first()
-        val output = ByteArray(frames.maxOfOrNull { it.size } ?: 0)
-        for (offset in output.indices step 2) {
-            var sum = 0
-            frames.forEach { frame ->
-                if (offset + 1 < frame.size) {
-                    sum += (frame[offset].toInt() and 0xff) or (frame[offset + 1].toInt() shl 8)
-                }
-            }
-            val sample = sum.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-            output[offset] = sample.toByte()
-            if (offset + 1 < output.size) output[offset + 1] = (sample shr 8).toByte()
-        }
-        return output
-    }
-
     companion object {
         const val SAMPLE_RATE = 16_000
         const val FRAME_BYTES = 640
-        private const val MIX_WINDOW_MS = 10L
         private const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT

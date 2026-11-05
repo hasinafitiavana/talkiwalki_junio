@@ -44,12 +44,12 @@ class TalkieWalkieViewModel(
                         hostPort = if (connected) session.port else null,
                         selfId = session.selfId,
                         speakerId = session.speakerId,
-                        isPushToTalkPressed = transmissionEnabled && connected,
-                        participants = session.participants.map { ParticipantUi(it.id, it.displayName, it.role == ParticipantRole.HOST) },
+                        isPushToTalkPressed = transmissionEnabled && session.speakerId == session.selfId,
+                        participants = session.participants.map { ParticipantUi(it.id, it.displayName, it.role == ParticipantRole.HOST, it.id == session.speakerId) },
                         errorMessage = session.error
                     )
                 }
-                val canTransmit = microphoneGranted && transmissionEnabled && connected
+                val canTransmit = microphoneGranted && transmissionEnabled && session.speakerId == session.selfId
                 if (canTransmit) audioEngine.startCapture(sessionRepository::sendAudio) else audioEngine.stopCapture()
             }
         }
@@ -121,8 +121,7 @@ class TalkieWalkieViewModel(
         if (!transmissionEnabled) audioEngine.stopCapture()
         viewModelScope.launch(Dispatchers.IO) {
             if (transmissionEnabled) sessionRepository.requestPtt() else sessionRepository.releasePtt()
-            if (microphoneGranted && transmissionEnabled) audioEngine.startCapture(sessionRepository::sendAudio) else audioEngine.stopCapture()
-            mutableUiState.update { it.copy(isPushToTalkPressed = transmissionEnabled) }
+            mutableUiState.update { it.copy(isPushToTalkPressed = transmissionEnabled && it.speakerId == it.selfId) }
         }
     }
 
