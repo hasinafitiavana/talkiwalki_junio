@@ -22,7 +22,7 @@ import com.talkiwalki.junior.ui.component.TalkieWalkieMark
 import com.talkiwalki.junior.ui.theme.TalkiWalkiJuniorTheme
 
 @Composable
-fun HomeScreen(onCreateGroup: () -> Unit, onJoinGroup: () -> Unit) {
+fun HomeScreen(errorMessage: String? = null, onCreateGroup: () -> Unit, onJoinGroup: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(PaddingValues(horizontal = 28.dp, vertical = 40.dp)).widthIn(max = 480.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         TalkieWalkieMark()
         Spacer(Modifier.height(12.dp))
@@ -31,6 +31,10 @@ fun HomeScreen(onCreateGroup: () -> Unit, onJoinGroup: () -> Unit) {
         Text("TalkiWalki Junior", style = androidx.compose.material3.MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
         Text("Communiquez simplement, sans Internet", style = androidx.compose.material3.MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
+        errorMessage?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, color = androidx.compose.material3.MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+        }
         Spacer(Modifier.height(48.dp))
         Button(onClick = onCreateGroup, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("Créer un groupe") }
         Spacer(Modifier.height(14.dp))
@@ -41,5 +45,5 @@ fun HomeScreen(onCreateGroup: () -> Unit, onJoinGroup: () -> Unit) {
 @Preview(showBackground = true)
 @Composable
 private fun HomeScreenPreview() {
-    TalkiWalkiJuniorTheme { HomeScreen({}, {}) }
+    TalkiWalkiJuniorTheme { HomeScreen(onCreateGroup = {}, onJoinGroup = {}) }
 }

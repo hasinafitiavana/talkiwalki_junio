@@ -44,7 +44,9 @@ class PcmAudioEngine(
             val buffer = ByteArray(FRAME_BYTES)
             while (isActive && recorder === record) {
                 val count = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
-                if (count > 0) onFrame(buffer.copyOf(count)) else break
+                if (count <= 0) break
+                val frame = buffer.copyOf(count)
+                if (VoiceActivityDetector.hasVoice(frame)) onFrame(frame)
             }
         }
     }

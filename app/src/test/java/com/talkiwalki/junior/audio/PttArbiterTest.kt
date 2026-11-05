@@ -16,4 +16,15 @@ class PttArbiterTest {
         arbiter.request("a"); now = 100
         assertEquals(null, arbiter.currentSpeaker()); assertTrue(arbiter.request("b"))
     }
+
+    @Test fun audioActivityRenewsLease() {
+        var now = 0L; val arbiter = PttArbiter(100) { now }
+
+        assertTrue(arbiter.request("a"))
+        now = 99
+        assertTrue(arbiter.renew("a"))
+        now = 150
+
+        assertEquals("a", arbiter.currentSpeaker())
+    }
 }

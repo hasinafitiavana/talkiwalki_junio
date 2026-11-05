@@ -29,15 +29,37 @@ class TalkieWalkieViewModel(
     private val speakerStartDetector = SpeakerStartDetector()
     private var microphoneGranted = false
     private var transmissionEnabled = false
+    private var wasLocalSpeaker = false
     private val mutableUiState = MutableStateFlow(TalkieWalkieUiState())
     val uiState: StateFlow<TalkieWalkieUiState> = mutableUiState.asStateFlow()
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
             sessionRepository.state.collectLatest { session ->
+                if (session.isGroupCancelled) {
+                    audioEngine.release()
+                    transmissionEnabled = false
+                    mutableUiState.update {
+                        it.copy(
+                            destination = AppDestination.HOME,
+                            status = ConnectionStatus.DISCONNECTED,
+                            participants = emptyList(),
+                            hostAddress = null,
+                            hostPort = null,
+                            speakerId = null,
+                            selfId = null,
+                            isPushToTalkPressed = false,
+                            errorMessage = session.error
+                        )
+                    }
+                    return@collectLatest
+                }
                 if (speakerStartDetector.anotherParticipantStartedSpeaking(session.selfId, session.speakerId)) {
                     speakerStartNotifier.notifySpeakerStarted()
                 }
+                val isLocalSpeaker = session.selfId != null && session.speakerId == session.selfId
+                if (wasLocalSpeaker && !isLocalSpeaker) transmissionEnabled = false
+                wasLocalSpeaker = isLocalSpeaker
                 val connected = session.participants.isNotEmpty()
                 mutableUiState.update { current ->
                     current.copy(

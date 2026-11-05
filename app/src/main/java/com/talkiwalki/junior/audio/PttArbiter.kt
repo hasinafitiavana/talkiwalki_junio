@@ -1,7 +1,7 @@
 package com.talkiwalki.junior.audio
 
 /** Host-owned, platform-free PTT lease arbiter. */
-class PttArbiter(private val timeoutMs: Long = 8_000L, private val clock: () -> Long = { System.currentTimeMillis() }) {
+class PttArbiter(private val timeoutMs: Long = 10_000L, private val clock: () -> Long = { System.currentTimeMillis() }) {
     private var speaker: String? = null
     private var expiry = 0L
     fun request(id: String): Boolean { expire(); return if (speaker == null) { speaker = id; expiry = clock() + timeoutMs; true } else false }

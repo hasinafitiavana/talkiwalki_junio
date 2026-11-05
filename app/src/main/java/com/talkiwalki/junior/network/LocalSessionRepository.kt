@@ -47,7 +47,8 @@ data class LocalSessionState(
     val selfId: String? = null,
     val speakerId: String? = null,
     val isHost: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val isGroupCancelled: Boolean = false
 )
 
 /** Owns one local TCP session. It never performs service discovery or Internet I/O. */
@@ -64,6 +65,7 @@ class LocalSessionRepository(
     private var server: ServerSocket? = null
     private var acceptJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var pttExpiryJob: Job? = null
     private var clientSocket: Socket? = null
     private var clientWriter: BufferedWriter? = null
     private var clientReaderJob: Job? = null
@@ -92,6 +94,7 @@ class LocalSessionRepository(
             stateFlow.value = LocalSessionState(groupName, LocalNetworkInfo.localIpv4Address(), socket.localPort, listOf(host), selfId = host.id, isHost = true)
             startUdp(UDP_PORT, null)
             acceptJob = scope.launch { acceptLoop(socket) }
+            startPttExpiryMonitor()
         }
     }.onFailure { fail("Impossible de démarrer le groupe : ${it.userMessage()}") }
 
@@ -134,6 +137,7 @@ class LocalSessionRepository(
     suspend fun close() {
         lock.withLock {
             heartbeatJob?.cancel(); heartbeatJob = null
+            pttExpiryJob?.cancel(); pttExpiryJob = null
             clientReaderJob?.cancel(); clientReaderJob = null
             runCatching { clientWriter?.let { send(it, LocalProtocol.Leave) } }
             runCatching { clientSocket?.close() }; clientSocket = null; clientWriter = null
@@ -222,7 +226,7 @@ class LocalSessionRepository(
                 else -> Unit
             }
         } catch (_: Exception) {
-            if (clientSocket == socket) fail("Connexion au groupe interrompue.")
+            if (clientSocket == socket) cancelGroupBecauseHostDisconnected()
         }
     }
 
@@ -231,7 +235,11 @@ class LocalSessionRepository(
         heartbeatJob = scope.launch {
             while (isActive && clientWriter != null) {
                 delay(HEARTBEAT_MS)
-                runCatching { clientWriter?.let { send(it, LocalProtocol.Heartbeat) } }.onFailure { fail("Connexion au groupe interrompue.") }
+                val heartbeat = runCatching { clientWriter?.let { send(it, LocalProtocol.Heartbeat) } }
+                if (heartbeat.isFailure) {
+                    cancelGroupBecauseHostDisconnected()
+                    break
+                }
             }
         }
     }
@@ -242,7 +250,16 @@ class LocalSessionRepository(
         if (state.speakerId != id || pcm.size > UdpVoiceCodec.MAX_PAYLOAD) return
         val wire = UdpVoiceCodec.encode(UdpVoicePacket(id, audioSequence++, pcm))
         val socket = udpSocket ?: return
-        scope.launch { runCatching { if (state.isHost) relayUdp(wire, id) else udpHost?.let { socket.send(DatagramPacket(wire, wire.size, it)) } } }
+        scope.launch {
+            runCatching {
+                if (state.isHost) {
+                    val leaseIsActive = lock.withLock { pttArbiter.renew(id) }
+                    if (leaseIsActive) relayUdp(wire, id)
+                } else {
+                    udpHost?.let { socket.send(DatagramPacket(wire, wire.size, it)) }
+                }
+            }
+        }
     }
 
     private fun startUdp(port: Int, host: InetSocketAddress?) {
@@ -260,7 +277,11 @@ class LocalSessionRepository(
                     val voice = UdpVoiceCodec.decode(datagram.data, datagram.length) ?: continue
                     if (isHost) {
                         val expected = udpPeers[voice.speakerId] ?: continue
-                        if (expected.address != datagram.address || expected.port != datagram.port || pttArbiter.currentSpeaker() != voice.speakerId) continue
+                        if (expected.address != datagram.address || expected.port != datagram.port) continue
+                        val leaseIsActive = lock.withLock {
+                            pttArbiter.currentSpeaker() == voice.speakerId && pttArbiter.renew(voice.speakerId)
+                        }
+                        if (!leaseIsActive) continue
                         incomingAudioFlow.tryEmit(voice); relayUdp(datagram.data.copyOf(datagram.length), voice.speakerId)
                     } else if (datagram.address == host?.address && voice.speakerId != stateFlow.value.selfId) incomingAudioFlow.tryEmit(voice)
                 } catch (_: Exception) { if (!socket.isClosed) delay(20) }
@@ -268,6 +289,19 @@ class LocalSessionRepository(
         }
     }
     private fun relayUdp(bytes: ByteArray, sender: String) { val socket = udpSocket ?: return; udpPeers.filterKeys { it != sender }.values.forEach { target -> runCatching { socket.send(DatagramPacket(bytes, bytes.size, target)) } } }
+
+    /** Releases a turn which has received no audio frames for ten seconds. */
+    private fun startPttExpiryMonitor() {
+        pttExpiryJob?.cancel()
+        pttExpiryJob = scope.launch {
+            while (isActive && isHost) {
+                delay(PTT_EXPIRY_CHECK_MS)
+                lock.withLock {
+                    if (stateFlow.value.speakerId != pttArbiter.currentSpeaker()) broadcastPttState()
+                }
+            }
+        }
+    }
 
     /**
      * PTT writes to the TCP control socket. Keep the dispatcher boundary here so
@@ -316,6 +350,11 @@ class LocalSessionRepository(
         peers.values.toList().forEach { peer -> runCatching { send(peer.writer, message) }.onFailure { peers.remove(peer.id); peer.close() } }
     }
 
+    private suspend fun cancelGroupBecauseHostDisconnected() {
+        close()
+        stateFlow.value = LocalSessionState(error = HOST_DISCONNECTED_MESSAGE, isGroupCancelled = true)
+    }
+
     private fun fail(message: String) { stateFlow.value = stateFlow.value.copy(error = message) }
     private fun parseEndpoint(value: String): Pair<String, Int> {
         val endpoint = value.trim()
@@ -344,6 +383,8 @@ class LocalSessionRepository(
         const val CONNECT_TIMEOUT_MS = 6_000
         const val READ_TIMEOUT_MS = 35_000
         const val HEARTBEAT_MS = 10_000L
+        const val HOST_DISCONNECTED_MESSAGE = "L’hôte s’est déconnecté : le groupe a été annulé."
+        const val PTT_EXPIRY_CHECK_MS = 500L
         const val UDP_PORT = 49_322
         const val MAX_CLIENTS = 8
         const val UDP_BUFFER_BYTES = 64 * 1024

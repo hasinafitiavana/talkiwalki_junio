@@ -33,7 +33,11 @@ fun TalkieWalkieApp(viewModel: TalkieWalkieViewModel) {
     Surface(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
         AnimatedContent(targetState = state.destination, transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) }, label = "navigation") { destination ->
             when (destination) {
-                AppDestination.HOME -> HomeScreen(onCreateGroup = { viewModel.navigateTo(AppDestination.CREATE_GROUP) }, onJoinGroup = { viewModel.navigateTo(AppDestination.JOIN_GROUP) })
+                AppDestination.HOME -> HomeScreen(
+                    errorMessage = state.errorMessage,
+                    onCreateGroup = { viewModel.navigateTo(AppDestination.CREATE_GROUP) },
+                    onJoinGroup = { viewModel.navigateTo(AppDestination.JOIN_GROUP) }
+                )
                 AppDestination.CREATE_GROUP -> CreateGroupScreen(state, viewModel::updateNickname, viewModel::updateGroupName, viewModel::createGroup, viewModel::navigateBack)
                 AppDestination.JOIN_GROUP -> JoinGroupScreen(
                     state, viewModel::updateNickname, viewModel::joinDiscoveredGroup,
