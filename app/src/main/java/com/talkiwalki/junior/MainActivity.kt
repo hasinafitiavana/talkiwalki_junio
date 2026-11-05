@@ -15,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.Lifecycle
 import com.talkiwalki.junior.network.NsdSessionDiscovery
+import com.talkiwalki.junior.audio.SpeakerStartVibration
 import com.talkiwalki.junior.ui.TalkieWalkieApp
 import com.talkiwalki.junior.ui.TalkieWalkieViewModel
 import com.talkiwalki.junior.ui.theme.TalkiWalkiJuniorTheme
@@ -28,7 +29,8 @@ class MainActivity : ComponentActivity() {
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
                 TalkieWalkieViewModel(
                     discovery = NsdSessionDiscovery(applicationContext),
-                    audioEngine = com.talkiwalki.junior.audio.PcmAudioEngine(applicationContext)
+                    audioEngine = com.talkiwalki.junior.audio.PcmAudioEngine(applicationContext),
+                    speakerStartNotifier = SpeakerStartVibration(applicationContext)
                 ) as T
         }
     }

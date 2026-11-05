@@ -8,6 +8,9 @@ import com.talkiwalki.junior.network.NoopSessionDiscovery
 import com.talkiwalki.junior.network.SessionDiscovery
 import com.talkiwalki.junior.network.QrGroupInvitation
 import com.talkiwalki.junior.audio.PcmAudioEngine
+import com.talkiwalki.junior.audio.NoopSpeakerStartNotifier
+import com.talkiwalki.junior.audio.SpeakerStartDetector
+import com.talkiwalki.junior.audio.SpeakerStartNotifier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,9 +22,11 @@ import kotlinx.coroutines.Dispatchers
 class TalkieWalkieViewModel(
     private val sessionRepository: LocalSessionRepository = LocalSessionRepository(),
     private val discovery: SessionDiscovery = NoopSessionDiscovery(),
-    audioEngine: PcmAudioEngine = PcmAudioEngine()
+    audioEngine: PcmAudioEngine = PcmAudioEngine(),
+    private val speakerStartNotifier: SpeakerStartNotifier = NoopSpeakerStartNotifier
 ) : ViewModel() {
     private val audioEngine = audioEngine
+    private val speakerStartDetector = SpeakerStartDetector()
     private var microphoneGranted = false
     private var transmissionEnabled = false
     private val mutableUiState = MutableStateFlow(TalkieWalkieUiState())
@@ -30,6 +35,9 @@ class TalkieWalkieViewModel(
     init {
         viewModelScope.launch(Dispatchers.IO) {
             sessionRepository.state.collectLatest { session ->
+                if (speakerStartDetector.anotherParticipantStartedSpeaking(session.selfId, session.speakerId)) {
+                    speakerStartNotifier.notifySpeakerStarted()
+                }
                 val connected = session.participants.isNotEmpty()
                 mutableUiState.update { current ->
                     current.copy(
