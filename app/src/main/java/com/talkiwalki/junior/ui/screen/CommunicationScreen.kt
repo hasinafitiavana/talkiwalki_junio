@@ -18,11 +18,19 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -32,18 +40,29 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.tooling.preview.Preview
 import com.talkiwalki.junior.ui.ConnectionStatus
 import com.talkiwalki.junior.ui.ParticipantUi
 import com.talkiwalki.junior.ui.TalkieWalkieUiState
+import com.talkiwalki.junior.ui.ChatMessageUi
 import com.talkiwalki.junior.ui.theme.TalkiWalkiJuniorTheme
 import com.talkiwalki.junior.network.QrGroupInvitation
 import com.talkiwalki.junior.ui.component.QrCode
 
 @Composable
-fun CommunicationScreen(state: TalkieWalkieUiState, onTransmissionToggle: () -> Unit, onLeave: () -> Unit) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+fun CommunicationScreen(
+    state: TalkieWalkieUiState,
+    onTransmissionToggle: () -> Unit,
+    onChatDraftChange: (String) -> Unit,
+    onSendChat: () -> Unit,
+    onLeave: () -> Unit
+) {
+    var isChatOpen by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(state.groupName, style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
         ConnectionBadge(state.status)
@@ -70,6 +89,21 @@ fun CommunicationScreen(state: TalkieWalkieUiState, onTransmissionToggle: () -> 
         Text("Audio local PCM — lecture sur haut-parleur", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
         Spacer(Modifier.height(24.dp))
         Button(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("Quitter le groupe") }
+        }
+        FloatingActionButton(
+            onClick = { isChatOpen = true },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp),
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary
+        ) { Text("💬") }
+    }
+    if (isChatOpen) {
+        ChatDialog(
+            state = state,
+            onDraftChange = onChatDraftChange,
+            onSend = onSendChat,
+            onDismiss = { isChatOpen = false }
+        )
     }
 }
 
@@ -83,7 +117,68 @@ private fun CommunicationScreenPreview() {
                 status = ConnectionStatus.CONNECTED,
                 participants = listOf(ParticipantUi("1", "Camille", true, true), ParticipantUi("2", "Noah"))
             ),
-            onTransmissionToggle = {}, onLeave = {}
+            onTransmissionToggle = {}, onChatDraftChange = {}, onSendChat = {}, onLeave = {}
+        )
+    }
+}
+
+@Composable private fun ChatDialog(
+    state: TalkieWalkieUiState,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(Modifier.fillMaxWidth().widthIn(max = 560.dp)) {
+            Column(Modifier.padding(20.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Discussion", style = MaterialTheme.typography.titleLarge)
+                        Text(state.groupName, style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = onDismiss) { Text("Fermer") }
+                }
+                Spacer(Modifier.height(8.dp))
+                Column(Modifier.fillMaxWidth().height(280.dp).verticalScroll(rememberScrollState())) {
+                    if (state.chatMessages.isEmpty()) {
+                        Text("Aucun message pour cette session.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp))
+                    } else {
+                        state.chatMessages.forEach { ChatMessageRow(it) }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = state.chatDraft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Écrire un message") },
+                    supportingText = { Text("Messages supprimés à la fin du groupe") },
+                    maxLines = 3
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onSend, modifier = Modifier.fillMaxWidth(), enabled = state.chatDraft.isNotBlank() && state.status == ConnectionStatus.CONNECTED) {
+                    Text("Envoyer")
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun ChatMessageRow(message: ChatMessageUi) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start
+    ) {
+        Text(if (message.isMine) "Vous" else message.senderName, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        Text(
+            message.text,
+            modifier = Modifier.background(
+                if (message.isMine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                RoundedCornerShape(16.dp)
+            ).padding(horizontal = 12.dp, vertical = 8.dp),
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = if (message.isMine) TextAlign.End else TextAlign.Start
         )
     }
 }

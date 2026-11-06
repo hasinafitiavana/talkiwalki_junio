@@ -23,4 +23,16 @@ class LocalProtocolTest {
         val encodedName = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString("a".repeat(33).toByteArray())
         assertTrue(LocalProtocol.decode("1|JOIN|$encodedName").isFailure)
     }
+
+    @Test fun chatMessage_roundTripPreservesValues() {
+        val message = LocalProtocol.ChatMessage("client-2", "Noah", "On se retrouve ici !", 1_700_000_000_000)
+
+        assertEquals(message, LocalProtocol.decode(LocalProtocol.encode(message)).getOrThrow())
+    }
+
+    @Test fun oversizedChatIsRejected() {
+        val encodedText = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString("a".repeat(501).toByteArray())
+
+        assertTrue(LocalProtocol.decode("3|CHAT_SEND|$encodedText").isFailure)
+    }
 }

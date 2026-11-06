@@ -53,6 +53,14 @@ data class LocalSessionState(
     val isGroupCancelled: Boolean = false
 )
 
+/** Kept only in memory for the lifetime of the local group session. */
+data class SessionChatMessage(
+    val senderId: String,
+    val senderName: String,
+    val text: String,
+    val sentAtMillis: Long
+)
+
 /** Owns one local TCP session. It never performs service discovery or Internet I/O. */
 class LocalSessionRepository(
     private val dispatchers: DispatcherProvider = DefaultDispatcherProvider,
@@ -62,6 +70,8 @@ class LocalSessionRepository(
     val state: StateFlow<LocalSessionState> = stateFlow.asStateFlow()
     private val incomingAudioFlow = MutableSharedFlow<UdpVoicePacket>(extraBufferCapacity = 64)
     val incomingAudio: SharedFlow<UdpVoicePacket> = incomingAudioFlow.asSharedFlow()
+    private val incomingChatFlow = MutableSharedFlow<SessionChatMessage>(extraBufferCapacity = 64)
+    val incomingChat: SharedFlow<SessionChatMessage> = incomingChatFlow.asSharedFlow()
     private val lock = Mutex()
     private val peerSlots = Semaphore(MAX_CLIENTS)
     private var server: ServerSocket? = null
@@ -206,6 +216,7 @@ class LocalSessionRepository(
                     LocalProtocol.PttRequest -> handlePttRequest(peer.id)
                     LocalProtocol.PttRelease -> handlePttRelease(peer.id)
                     is LocalProtocol.UdpRegister -> udpPeers[peer.id] = InetSocketAddress(socket.inetAddress, control.port)
+                    is LocalProtocol.ChatSend -> handleChatSend(peer, control.text)
                     else -> send(writer, LocalProtocol.Error("Message non autorisé."))
                 }
             }
@@ -230,6 +241,7 @@ class LocalSessionRepository(
                 is LocalProtocol.PttGranted -> stateFlow.value = stateFlow.value.copy(speakerId = message.speakerId)
                 is LocalProtocol.PttDenied -> stateFlow.value = stateFlow.value.copy(speakerId = message.speakerId)
                 is LocalProtocol.PttState -> stateFlow.value = stateFlow.value.copy(speakerId = message.speakerId)
+                is LocalProtocol.ChatMessage -> incomingChatFlow.tryEmit(message.toSessionChatMessage())
                 else -> Unit
             }
         } catch (_: Exception) {
@@ -343,10 +355,39 @@ class LocalSessionRepository(
         }
     }
 
+    /** Sends only through the existing local group socket; nothing is persisted or sent to the Internet. */
+    suspend fun sendChat(text: String): Result<Unit> = runCatching {
+        val cleanText = text.trim()
+        require(cleanText.length in 1..500) { "Le message doit contenir entre 1 et 500 caractères." }
+        withContext(dispatchers.io) {
+            lock.withLock {
+                val session = stateFlow.value
+                val selfId = session.selfId ?: error("Groupe indisponible.")
+                if (isHost) {
+                    val sender = session.participants.firstOrNull { it.id == selfId } ?: error("Participant introuvable.")
+                    broadcastChat(SessionChatMessage(selfId, sender.displayName, cleanText, System.currentTimeMillis()))
+                } else {
+                    val writer = clientWriter ?: error("Groupe indisponible.")
+                    send(writer, LocalProtocol.ChatSend(cleanText))
+                }
+            }
+        }
+    }
+
     private suspend fun handlePttRequest(id: String) {
         val granted = pttArbiter.request(id)
         peers[id]?.let { send(it.writer, if (granted) LocalProtocol.PttGranted(id) else LocalProtocol.PttDenied(pttArbiter.currentSpeaker())) }
         if (granted) broadcastPttState()
+    }
+    private suspend fun handleChatSend(peer: Peer, text: String) {
+        lock.withLock {
+            broadcastChat(SessionChatMessage(peer.id, peer.name, text, System.currentTimeMillis()))
+        }
+    }
+    private fun broadcastChat(chat: SessionChatMessage) {
+        incomingChatFlow.tryEmit(chat)
+        val message = LocalProtocol.ChatMessage(chat.senderId, chat.senderName, chat.text, chat.sentAtMillis)
+        peers.values.toList().forEach { peer -> runCatching { send(peer.writer, message) } }
     }
     private suspend fun handlePttRelease(id: String) { if (pttArbiter.release(id)) broadcastPttState() }
     private suspend fun broadcastPttState() {
@@ -390,6 +431,7 @@ class LocalSessionRepository(
     private fun read(reader: BufferedReader): Message { val line = reader.readLine() ?: error("Connexion fermée."); return LocalProtocol.decode(line).getOrElse { throw IllegalArgumentException(it.message) } }
     private fun send(writer: BufferedWriter, message: Message) = synchronized(writer) { writer.write(LocalProtocol.encode(message)); writer.newLine(); writer.flush() }
     private fun WireParticipant.toParticipant() = Participant(id, name, if (isHost) ParticipantRole.HOST else ParticipantRole.PARTICIPANT)
+    private fun LocalProtocol.ChatMessage.toSessionChatMessage() = SessionChatMessage(senderId, senderName, text, sentAtMillis)
     private fun Throwable.userMessage() = message?.take(120) ?: "erreur réseau"
 
     private data class OutgoingAudio(val speakerId: String, val isHost: Boolean, val pcm: ByteArray)

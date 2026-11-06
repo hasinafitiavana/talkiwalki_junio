@@ -16,6 +16,13 @@ object NoopSpeakerStartNotifier : SpeakerStartNotifier {
 }
 
 class SpeakerStartVibration(context: Context) : SpeakerStartNotifier {
+    private val triplePulse = ThreePulseVibration(context)
+
+    override fun notifySpeakerStarted() = triplePulse.vibrate()
+}
+
+/** One short, recognisable alert used for both incoming messages and speech starts. */
+class ThreePulseVibration(context: Context) {
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         context.getSystemService(VibratorManager::class.java)?.defaultVibrator
     } else {
@@ -23,16 +30,17 @@ class SpeakerStartVibration(context: Context) : SpeakerStartNotifier {
         context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
     }
 
-    override fun notifySpeakerStarted() {
+    fun vibrate() {
         val deviceVibrator = vibrator ?: return
         if (!deviceVibrator.hasVibrator()) return
         deviceVibrator.vibrate(
-            VibrationEffect.createOneShot(VIBRATION_DURATION_MS, VibrationEffect.DEFAULT_AMPLITUDE)
+            VibrationEffect.createWaveform(PULSE_PATTERN, -1)
         )
     }
 
     private companion object {
-        const val VIBRATION_DURATION_MS = 5_000L
+        // Three 150 ms pulses, spaced by 100 ms silences.
+        val PULSE_PATTERN = longArrayOf(0L, 150L, 100L, 150L, 100L, 150L)
     }
 }
 

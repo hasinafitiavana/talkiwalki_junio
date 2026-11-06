@@ -5,7 +5,7 @@ import java.util.Base64
 
 /** Line-delimited, versioned protocol used only on the local Wi-Fi network. */
 object LocalProtocol {
-    const val VERSION = 2
+    const val VERSION = 3
     const val MAX_LINE_BYTES = 8 * 1024
     const val DEFAULT_PORT = 49_321
 
@@ -22,6 +22,10 @@ object LocalProtocol {
     data class PttDenied(val speakerId: String?) : Message { override val type = "PTT_DENIED" }
     data class PttState(val speakerId: String?) : Message { override val type = "PTT_STATE" }
     data class UdpRegister(val port: Int) : Message { override val type = "UDP_REGISTER" }
+    /** A client-to-host chat message. The host supplies the sender identity and time. */
+    data class ChatSend(val text: String) : Message { override val type = "CHAT_SEND" }
+    /** A chat message relayed by the host to every member of the local group. */
+    data class ChatMessage(val senderId: String, val senderName: String, val text: String, val sentAtMillis: Long) : Message { override val type = "CHAT_MESSAGE" }
     data class Error(val reason: String) : Message { override val type = "ERROR" }
 
     data class WireParticipant(val id: String, val name: String, val isHost: Boolean)
@@ -37,6 +41,8 @@ object LocalProtocol {
             is PttDenied -> listOf(message.speakerId ?: "")
             is PttState -> listOf(message.speakerId ?: "")
             is UdpRegister -> listOf(message.port.toString())
+            is ChatSend -> listOf(message.text)
+            is ChatMessage -> listOf(message.senderId, message.senderName, message.text, message.sentAtMillis.toString())
             is Error -> listOf(message.reason)
         }
         return listOf(VERSION.toString(), message.type, *fields.map(::encodeField).toTypedArray()).joinToString("|")
@@ -64,6 +70,8 @@ object LocalProtocol {
             "PTT_DENIED" -> PttDenied(value(2).ifBlank { null }?.validatedToken())
             "PTT_STATE" -> PttState(value(2).ifBlank { null }?.validatedToken())
             "UDP_REGISTER" -> UdpRegister(value(2).toInt().also { require(it in 1..65535) })
+            "CHAT_SEND" -> ChatSend(value(2).validatedChatText())
+            "CHAT_MESSAGE" -> ChatMessage(value(2).validatedToken(), value(3).validatedName(), value(4).validatedChatText(), value(5).toLong().also { require(it >= 0) })
             "ERROR" -> Error(value(2).validatedReason())
             else -> error("Type de message inconnu.")
         }
@@ -74,4 +82,5 @@ object LocalProtocol {
     private fun String.validatedName(): String { require(length in 1..32) { "Pseudo ou groupe invalide." }; return this }
     private fun String.validatedToken(): String { require(length in 1..64) { "Identifiant invalide." }; return this }
     private fun String.validatedReason(): String { require(length in 1..120) { "Erreur invalide." }; return this }
+    private fun String.validatedChatText(): String { require(length in 1..500) { "Message invalide." }; return this }
 }

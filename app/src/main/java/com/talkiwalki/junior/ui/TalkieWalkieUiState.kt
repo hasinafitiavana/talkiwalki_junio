@@ -17,6 +17,14 @@ data class ParticipantUi(
     val isSpeaking: Boolean = false
 )
 
+data class ChatMessageUi(
+    val id: String,
+    val senderName: String,
+    val text: String,
+    val sentAtMillis: Long,
+    val isMine: Boolean
+)
+
 data class TalkieWalkieUiState(
     val destination: AppDestination = AppDestination.HOME,
     val status: ConnectionStatus = ConnectionStatus.DISCONNECTED,
@@ -32,5 +40,7 @@ data class TalkieWalkieUiState(
     val speakerId: String? = null,
     val selfId: String? = null,
     val isPushToTalkPressed: Boolean = false,
+    val chatDraft: String = "",
+    val chatMessages: List<ChatMessageUi> = emptyList(),
     val errorMessage: String? = null
 )

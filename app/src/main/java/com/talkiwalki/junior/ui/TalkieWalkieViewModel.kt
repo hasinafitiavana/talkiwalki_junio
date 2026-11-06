@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import java.util.UUID
 
 class TalkieWalkieViewModel(
     private val sessionRepository: LocalSessionRepository = LocalSessionRepository(),
@@ -50,6 +51,8 @@ class TalkieWalkieViewModel(
                             speakerId = null,
                             selfId = null,
                             isPushToTalkPressed = false,
+                            chatDraft = "",
+                            chatMessages = emptyList(),
                             errorMessage = session.error
                         )
                     }
@@ -86,6 +89,22 @@ class TalkieWalkieViewModel(
         }
         viewModelScope.launch { sessionRepository.incomingAudio.collect { audioEngine.play(it) } }
         viewModelScope.launch {
+            sessionRepository.incomingChat.collect { message ->
+                mutableUiState.update { current ->
+                    current.copy(
+                        chatMessages = (current.chatMessages + ChatMessageUi(
+                            id = UUID.randomUUID().toString(),
+                            senderName = message.senderName,
+                            text = message.text,
+                            sentAtMillis = message.sentAtMillis,
+                            isMine = message.senderId == current.selfId
+                        )).takeLast(MAX_SESSION_MESSAGES),
+                        chatDraft = if (message.senderId == current.selfId) "" else current.chatDraft
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
             discovery.snapshot.collectLatest { snapshot ->
                 mutableUiState.update { it.copy(discoveredGroups = snapshot.groups, isDiscovering = snapshot.isSearching, isResolvingGroup = snapshot.resolvingCount > 0, errorMessage = snapshot.error ?: it.errorMessage) }
             }
@@ -100,6 +119,7 @@ class TalkieWalkieViewModel(
     fun updateNickname(value: String) = mutableUiState.update { it.copy(nickname = value) }
     fun updateGroupName(value: String) = mutableUiState.update { it.copy(groupName = value) }
     fun updateManualAddress(value: String) = mutableUiState.update { it.copy(manualAddress = value) }
+    fun updateChatDraft(value: String) = mutableUiState.update { it.copy(chatDraft = value.take(MAX_CHAT_CHARACTERS)) }
     fun refreshDiscoveredGroups() = discovery.refreshDiscovery()
     fun onMicrophonePermissionResult(granted: Boolean) {
         microphoneGranted = granted
@@ -156,14 +176,23 @@ class TalkieWalkieViewModel(
         }
     }
 
+    fun sendChatMessage() {
+        val message = mutableUiState.value.chatDraft.trim()
+        if (message.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            sessionRepository.sendChat(message).onFailure { showError(it.message ?: "Envoi du message impossible.") }
+        }
+    }
+
     fun leaveGroup() {
         audioEngine.release()
         transmissionEnabled = false
         discovery.stopAdvertising()
         discovery.stopDiscovery()
         viewModelScope.launch(Dispatchers.IO) { sessionRepository.close() }
-        mutableUiState.update { it.copy(destination = AppDestination.HOME, status = ConnectionStatus.DISCONNECTED, participants = emptyList(), hostAddress = null, hostPort = null, isPushToTalkPressed = false, errorMessage = null) }
+        mutableUiState.update { it.copy(destination = AppDestination.HOME, status = ConnectionStatus.DISCONNECTED, participants = emptyList(), hostAddress = null, hostPort = null, isPushToTalkPressed = false, chatDraft = "", chatMessages = emptyList(), errorMessage = null) }
     }
     private fun showError(message: String) = mutableUiState.update { it.copy(status = ConnectionStatus.ERROR, errorMessage = message) }
     override fun onCleared() { audioEngine.release(); discovery.stopAdvertising(); discovery.stopDiscovery(); super.onCleared() }
+    private companion object { const val MAX_CHAT_CHARACTERS = 500; const val MAX_SESSION_MESSAGES = 200 }
 }

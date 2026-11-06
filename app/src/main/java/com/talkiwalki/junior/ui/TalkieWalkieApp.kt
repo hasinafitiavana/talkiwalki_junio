@@ -52,7 +52,13 @@ fun TalkieWalkieApp(viewModel: TalkieWalkieViewModel) {
                     onManualJoin = viewModel::joinByManualAddress,
                     onBack = viewModel::navigateBack
                 )
-                AppDestination.COMMUNICATION -> CommunicationScreen(state, viewModel::toggleTransmission, viewModel::leaveGroup)
+                AppDestination.COMMUNICATION -> CommunicationScreen(
+                    state = state,
+                    onTransmissionToggle = viewModel::toggleTransmission,
+                    onChatDraftChange = viewModel::updateChatDraft,
+                    onSendChat = viewModel::sendChatMessage,
+                    onLeave = viewModel::leaveGroup
+                )
             }
         }
     }
