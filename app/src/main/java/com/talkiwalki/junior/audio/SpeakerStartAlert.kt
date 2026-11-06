@@ -30,17 +30,22 @@ class ThreePulseVibration(context: Context) {
         context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
     }
 
-    fun vibrate() {
+    fun vibrate(pulses: Int = 3) {
         val deviceVibrator = vibrator ?: return
         if (!deviceVibrator.hasVibrator()) return
         deviceVibrator.vibrate(
-            VibrationEffect.createWaveform(PULSE_PATTERN, -1)
+            VibrationEffect.createWaveform(patternFor(pulses), -1)
         )
     }
 
     private companion object {
-        // Three 150 ms pulses, spaced by 100 ms silences.
-        val PULSE_PATTERN = longArrayOf(0L, 150L, 100L, 150L, 100L, 150L)
+        fun patternFor(pulses: Int): LongArray = buildList {
+            add(0L)
+            repeat(pulses.coerceIn(1, 8)) { add(PULSE_DURATION_MS); add(PAUSE_DURATION_MS) }
+        }.dropLast(1).toLongArray()
+
+        const val PULSE_DURATION_MS = 500L
+        const val PAUSE_DURATION_MS = 200L
     }
 }
 

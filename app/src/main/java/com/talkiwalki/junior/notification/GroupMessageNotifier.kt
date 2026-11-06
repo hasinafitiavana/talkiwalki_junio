@@ -11,12 +11,14 @@ import androidx.core.content.ContextCompat
 import com.talkiwalki.junior.R
 import com.talkiwalki.junior.audio.ThreePulseVibration
 
-fun interface GroupMessageNotifier {
+interface GroupMessageNotifier {
     fun notifyIncomingMessage(groupName: String, senderName: String, text: String)
+    fun notifyIncomingAlert(groupName: String, senderName: String)
 }
 
 object NoopGroupMessageNotifier : GroupMessageNotifier {
     override fun notifyIncomingMessage(groupName: String, senderName: String, text: String) = Unit
+    override fun notifyIncomingAlert(groupName: String, senderName: String) = Unit
 }
 
 /** Posts alerts from the session ViewModel, which remains alive behind the UI in the foreground service. */
@@ -45,6 +47,20 @@ class AndroidGroupMessageNotifier(context: Context) : GroupMessageNotifier {
                 .setContentTitle("$senderName · $groupName")
                 .setContentText(text)
                 .setStyle(Notification.BigTextStyle().bigText(text))
+                .setAutoCancel(true)
+                .build()
+        )
+    }
+
+    override fun notifyIncomingAlert(groupName: String, senderName: String) {
+        vibration.vibrate(pulses = 5)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        notificationManager.notify(
+            nextNotificationId++,
+            Notification.Builder(appContext, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Alerte de $senderName")
+                .setContentText("$senderName souhaite votre attention dans $groupName")
                 .setAutoCancel(true)
                 .build()
         )

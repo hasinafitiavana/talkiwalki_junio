@@ -9,7 +9,6 @@ import com.talkiwalki.junior.network.SessionDiscovery
 import com.talkiwalki.junior.network.QrGroupInvitation
 import com.talkiwalki.junior.audio.PcmAudioEngine
 import com.talkiwalki.junior.audio.NoopSpeakerStartNotifier
-import com.talkiwalki.junior.audio.SpeakerStartDetector
 import com.talkiwalki.junior.audio.SpeakerStartNotifier
 import com.talkiwalki.junior.notification.GroupMessageNotifier
 import com.talkiwalki.junior.notification.NoopGroupMessageNotifier
@@ -31,10 +30,9 @@ class TalkieWalkieViewModel(
     private val messageNotifier: GroupMessageNotifier = NoopGroupMessageNotifier
 ) : ViewModel() {
     private val audioEngine = audioEngine
-    private val speakerStartDetector = SpeakerStartDetector()
+    private val remoteVoiceLastHeard = mutableMapOf<String, Long>()
     private var microphoneGranted = false
     private var transmissionEnabled = false
-    private var wasLocalSpeaker = false
     private val mutableUiState = MutableStateFlow(TalkieWalkieUiState())
     val uiState: StateFlow<TalkieWalkieUiState> = mutableUiState.asStateFlow()
 
@@ -61,12 +59,6 @@ class TalkieWalkieViewModel(
                     }
                     return@collectLatest
                 }
-                if (speakerStartDetector.anotherParticipantStartedSpeaking(session.selfId, session.speakerId)) {
-                    speakerStartNotifier.notifySpeakerStarted()
-                }
-                val isLocalSpeaker = session.selfId != null && session.speakerId == session.selfId
-                if (wasLocalSpeaker && !isLocalSpeaker) transmissionEnabled = false
-                wasLocalSpeaker = isLocalSpeaker
                 val connected = session.participants.isNotEmpty()
                 mutableUiState.update { current ->
                     current.copy(
@@ -81,16 +73,25 @@ class TalkieWalkieViewModel(
                         hostPort = if (connected) session.port else null,
                         selfId = session.selfId,
                         speakerId = session.speakerId,
-                        isPushToTalkPressed = transmissionEnabled && session.speakerId == session.selfId,
-                        participants = session.participants.map { ParticipantUi(it.id, it.displayName, it.role == ParticipantRole.HOST, it.id == session.speakerId) },
+                        isPushToTalkPressed = transmissionEnabled,
+                        participants = session.participants.map { ParticipantUi(it.id, it.displayName, it.role == ParticipantRole.HOST) },
                         errorMessage = session.error
                     )
                 }
-                val canTransmit = microphoneGranted && transmissionEnabled && session.speakerId == session.selfId
+                val canTransmit = microphoneGranted && transmissionEnabled
                 if (canTransmit) audioEngine.startCapture(sessionRepository::sendAudio) else audioEngine.stopCapture()
             }
         }
-        viewModelScope.launch { sessionRepository.incomingAudio.collect { audioEngine.play(it) } }
+        viewModelScope.launch {
+            sessionRepository.incomingAudio.collect { audio ->
+                val now = System.currentTimeMillis()
+                if (now - (remoteVoiceLastHeard[audio.speakerId] ?: 0L) > SPEAKER_ALERT_COOLDOWN_MS) {
+                    speakerStartNotifier.notifySpeakerStarted()
+                }
+                remoteVoiceLastHeard[audio.speakerId] = now
+                audioEngine.play(audio)
+            }
+        }
         viewModelScope.launch {
             sessionRepository.incomingChat.collect { message ->
                 val current = mutableUiState.value
@@ -108,6 +109,11 @@ class TalkieWalkieViewModel(
                         chatDraft = if (message.senderId == current.selfId) "" else current.chatDraft
                     )
                 }
+            }
+        }
+        viewModelScope.launch {
+            sessionRepository.incomingAlert.collect { alert ->
+                messageNotifier.notifyIncomingAlert(mutableUiState.value.groupName, alert.senderName)
             }
         }
         viewModelScope.launch {
@@ -171,15 +177,18 @@ class TalkieWalkieViewModel(
         joinByManualAddress()
     }
 
-    /** Starts or stops transmitting with one tap. */
+    /** Starts or stops this participant's microphone. Other participants may transmit at the same time. */
     fun toggleTransmission() {
         if (mutableUiState.value.status != ConnectionStatus.CONNECTED) return
         transmissionEnabled = !transmissionEnabled
-        if (!transmissionEnabled) audioEngine.stopCapture()
         viewModelScope.launch(Dispatchers.IO) {
-            if (transmissionEnabled) sessionRepository.requestPtt() else sessionRepository.releasePtt()
-            mutableUiState.update { it.copy(isPushToTalkPressed = transmissionEnabled && it.speakerId == it.selfId) }
+            if (microphoneGranted && transmissionEnabled) {
+                audioEngine.startCapture(sessionRepository::sendAudio)
+            } else {
+                audioEngine.stopCapture()
+            }
         }
+        mutableUiState.update { it.copy(isPushToTalkPressed = transmissionEnabled) }
     }
 
     fun sendChatMessage() {
@@ -190,9 +199,16 @@ class TalkieWalkieViewModel(
         }
     }
 
+    fun notifyGroup() {
+        viewModelScope.launch(Dispatchers.IO) {
+            sessionRepository.notifyOthers().onFailure { showError(it.message ?: "Alerte impossible à envoyer.") }
+        }
+    }
+
     fun leaveGroup() {
         audioEngine.release()
         transmissionEnabled = false
+        remoteVoiceLastHeard.clear()
         discovery.stopAdvertising()
         discovery.stopDiscovery()
         viewModelScope.launch(Dispatchers.IO) { sessionRepository.close() }
@@ -200,5 +216,9 @@ class TalkieWalkieViewModel(
     }
     private fun showError(message: String) = mutableUiState.update { it.copy(status = ConnectionStatus.ERROR, errorMessage = message) }
     override fun onCleared() { audioEngine.release(); discovery.stopAdvertising(); discovery.stopDiscovery(); super.onCleared() }
-    private companion object { const val MAX_CHAT_CHARACTERS = 500; const val MAX_SESSION_MESSAGES = 200 }
+    private companion object {
+        const val MAX_CHAT_CHARACTERS = 500
+        const val MAX_SESSION_MESSAGES = 200
+        const val SPEAKER_ALERT_COOLDOWN_MS = 1_000L
+    }
 }

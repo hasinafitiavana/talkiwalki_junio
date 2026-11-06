@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -23,10 +26,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +46,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.tooling.preview.Preview
@@ -56,6 +62,7 @@ import com.talkiwalki.junior.ui.component.QrCode
 fun CommunicationScreen(
     state: TalkieWalkieUiState,
     onTransmissionToggle: () -> Unit,
+    onNotifyGroup: () -> Unit,
     onChatDraftChange: (String) -> Unit,
     onSendChat: () -> Unit,
     onLeave: () -> Unit
@@ -81,12 +88,14 @@ fun CommunicationScreen(
         Spacer(Modifier.height(22.dp))
         Text("${state.participants.size} participant${if (state.participants.size > 1) "s" else ""}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
-        Column(modifier = Modifier.fillMaxWidth()) { state.participants.forEach { ParticipantRow(it) } }
+        Column(modifier = Modifier.fillMaxWidth()) { state.participants.forEach { ParticipantRow(it, it.id == state.selfId) } }
         Spacer(Modifier.height(32.dp))
         PushToTalkButton(isTransmitting = state.isPushToTalkPressed, onClick = onTransmissionToggle)
         Spacer(Modifier.height(12.dp))
-        Text(when { state.isPushToTalkPressed -> "Vous parlez…"; state.speakerId != null -> "Un participant parle"; else -> "Appuyez pour parler" }, style = MaterialTheme.typography.titleMedium)
+        Text(if (state.isPushToTalkPressed) "Votre micro est activé" else "Appuyez pour activer votre micro", style = MaterialTheme.typography.titleMedium)
         Text("Audio local PCM — lecture sur haut-parleur", style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onNotifyGroup, enabled = state.participants.size > 1) { Text("Notifier le groupe") }
         Spacer(Modifier.height(24.dp))
         Button(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("Quitter le groupe") }
         }
@@ -117,7 +126,7 @@ private fun CommunicationScreenPreview() {
                 status = ConnectionStatus.CONNECTED,
                 participants = listOf(ParticipantUi("1", "Camille", true, true), ParticipantUi("2", "Noah"))
             ),
-            onTransmissionToggle = {}, onChatDraftChange = {}, onSendChat = {}, onLeave = {}
+            onTransmissionToggle = {}, onNotifyGroup = {}, onChatDraftChange = {}, onSendChat = {}, onLeave = {}
         )
     }
 }
@@ -128,6 +137,12 @@ private fun CommunicationScreenPreview() {
     onSend: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val messageListState = rememberLazyListState()
+    LaunchedEffect(state.chatMessages.lastOrNull()?.id) {
+        if (state.chatMessages.isNotEmpty()) {
+            messageListState.animateScrollToItem(state.chatMessages.lastIndex)
+        }
+    }
     Dialog(onDismissRequest = onDismiss) {
         Card(Modifier.fillMaxWidth().widthIn(max = 560.dp)) {
             Column(Modifier.padding(20.dp)) {
@@ -139,11 +154,11 @@ private fun CommunicationScreenPreview() {
                     TextButton(onClick = onDismiss) { Text("Fermer") }
                 }
                 Spacer(Modifier.height(8.dp))
-                Column(Modifier.fillMaxWidth().height(280.dp).verticalScroll(rememberScrollState())) {
+                LazyColumn(Modifier.fillMaxWidth().height(280.dp), state = messageListState) {
                     if (state.chatMessages.isEmpty()) {
-                        Text("Aucun message pour cette session.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp))
+                        item { Text("Aucun message pour cette session.", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 12.dp)) }
                     } else {
-                        state.chatMessages.forEach { ChatMessageRow(it) }
+                        items(state.chatMessages.size) { index -> ChatMessageRow(state.chatMessages[index]) }
                     }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -191,15 +206,19 @@ private fun CommunicationScreenPreview() {
     }
 }
 
-@Composable private fun ParticipantRow(participant: ParticipantUi) {
-    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+@Composable private fun ParticipantRow(participant: ParticipantUi, isCurrentUser: Boolean) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = if (isCurrentUser) CurrentUserGreenBackground else MaterialTheme.colorScheme.surfaceVariant)) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).background(if (participant.isSpeaking) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, CircleShape))
-            Spacer(Modifier.width(12.dp)); Text(participant.name, modifier = Modifier.weight(1f), fontWeight = if (participant.isSpeaking) FontWeight.Bold else FontWeight.Normal)
-            Text(when { participant.isSpeaking -> "Parle"; participant.isHost -> "Hôte"; else -> "" }, color = MaterialTheme.colorScheme.primary)
+            Box(Modifier.size(10.dp).background(if (isCurrentUser) CurrentUserGreen else MaterialTheme.colorScheme.onSurfaceVariant, CircleShape))
+            Spacer(Modifier.width(12.dp)); Text(participant.name, modifier = Modifier.weight(1f), fontWeight = if (participant.isSpeaking) FontWeight.Bold else FontWeight.Normal, color = if (isCurrentUser) CurrentUserGreenText else MaterialTheme.colorScheme.onSurface)
+            Text(when { isCurrentUser -> "Vous"; participant.isHost -> "Hôte"; else -> "" }, color = if (isCurrentUser) CurrentUserGreen else MaterialTheme.colorScheme.primary)
         }
     }
 }
+
+private val CurrentUserGreen = Color(0xFF2E7D32)
+private val CurrentUserGreenBackground = Color(0xFFE8F5E9)
+private val CurrentUserGreenText = Color(0xFF17351D)
 
 @Composable private fun PushToTalkButton(isTransmitting: Boolean, onClick: () -> Unit) {
     val scale = animateFloatAsState(if (isTransmitting) .94f else 1f, label = "pttScale")

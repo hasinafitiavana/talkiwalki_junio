@@ -100,23 +100,54 @@ class PcmAudioEngine(
     private suspend fun playbackLoop() {
         while (currentCoroutineContext().isActive) {
             val firstPacket = playbackPackets.receiveCatching().getOrNull() ?: break
-            val jitterBuffer = VoiceJitterBuffer(FRAME_BYTES)
-            jitterBuffer.offer(firstPacket)
+            val jitterBuffers = mutableMapOf<String, VoiceJitterBuffer>()
+            val missingFrames = mutableMapOf<String, Int>()
+            jitterBuffers.getOrPut(firstPacket.speakerId) { VoiceJitterBuffer(FRAME_BYTES) }.offer(firstPacket)
 
             // Hold three 20 ms packets before playback to absorb normal Wi-Fi jitter.
             delay(JITTER_DELAY_MS)
-            var consecutiveMissingFrames = 0
-            while (currentCoroutineContext().isActive && consecutiveMissingFrames < MAX_MISSING_FRAMES) {
+            while (currentCoroutineContext().isActive && jitterBuffers.isNotEmpty()) {
                 while (true) {
                     val packet = playbackPackets.tryReceive().getOrNull() ?: break
-                    jitterBuffer.offer(packet)
+                    jitterBuffers.getOrPut(packet.speakerId) { VoiceJitterBuffer(FRAME_BYTES) }.offer(packet)
                 }
-                val frame = jitterBuffer.nextFrame()
-                if (frame.all { it == 0.toByte() }) consecutiveMissingFrames++ else consecutiveMissingFrames = 0
-                writeToSpeaker(frame)
+                val frames = jitterBuffers.mapNotNull { (speakerId, buffer) ->
+                    val frame = buffer.nextFrame()
+                    if (frame.all { it == 0.toByte() }) {
+                        missingFrames[speakerId] = (missingFrames[speakerId] ?: 0) + 1
+                        null
+                    } else {
+                        missingFrames[speakerId] = 0
+                        frame
+                    }
+                }
+                jitterBuffers.keys.filter { (missingFrames[it] ?: 0) >= MAX_MISSING_FRAMES }.forEach {
+                    jitterBuffers.remove(it)
+                    missingFrames.remove(it)
+                }
+                if (frames.isNotEmpty()) writeToSpeaker(mixFrames(frames))
                 delay(FRAME_DURATION_MS)
             }
         }
+    }
+
+    /** Mixes signed 16-bit PCM frames so overlapping speakers remain audible. */
+    private fun mixFrames(frames: List<ByteArray>): ByteArray {
+        if (frames.size == 1) return frames.first()
+        val mixed = ByteArray(FRAME_BYTES)
+        for (offset in mixed.indices step 2) {
+            var total = 0
+            frames.forEach { frame ->
+                if (offset + 1 < frame.size) {
+                    val sample = (frame[offset].toInt() and 0xff) or (frame[offset + 1].toInt() shl 8)
+                    total += sample.toShort().toInt()
+                }
+            }
+            val average = (total / frames.size).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            mixed[offset] = (average and 0xff).toByte()
+            mixed[offset + 1] = (average shr 8).toByte()
+        }
+        return mixed
     }
 
     private fun createPlayer(): AudioTrack {

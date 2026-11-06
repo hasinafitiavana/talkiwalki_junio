@@ -26,6 +26,8 @@ object LocalProtocol {
     data class ChatSend(val text: String) : Message { override val type = "CHAT_SEND" }
     /** A chat message relayed by the host to every member of the local group. */
     data class ChatMessage(val senderId: String, val senderName: String, val text: String, val sentAtMillis: Long) : Message { override val type = "CHAT_MESSAGE" }
+    data object NotifyOthers : Message { override val type = "NOTIFY_OTHERS" }
+    data class GroupAlert(val senderId: String, val senderName: String) : Message { override val type = "GROUP_ALERT" }
     data class Error(val reason: String) : Message { override val type = "ERROR" }
 
     data class WireParticipant(val id: String, val name: String, val isHost: Boolean)
@@ -36,13 +38,14 @@ object LocalProtocol {
             is JoinAccepted -> listOf(message.sessionId, message.groupName, message.participantId)
             is JoinRejected -> listOf(message.reason)
             is ParticipantsUpdated -> message.participants.flatMap { listOf(it.id, it.name, if (it.isHost) "1" else "0") }
-            Leave, Heartbeat, PttRequest, PttRelease -> emptyList()
+            Leave, Heartbeat, PttRequest, PttRelease, NotifyOthers -> emptyList()
             is PttGranted -> listOf(message.speakerId)
             is PttDenied -> listOf(message.speakerId ?: "")
             is PttState -> listOf(message.speakerId ?: "")
             is UdpRegister -> listOf(message.port.toString())
             is ChatSend -> listOf(message.text)
             is ChatMessage -> listOf(message.senderId, message.senderName, message.text, message.sentAtMillis.toString())
+            is GroupAlert -> listOf(message.senderId, message.senderName)
             is Error -> listOf(message.reason)
         }
         return listOf(VERSION.toString(), message.type, *fields.map(::encodeField).toTypedArray()).joinToString("|")
@@ -72,6 +75,8 @@ object LocalProtocol {
             "UDP_REGISTER" -> UdpRegister(value(2).toInt().also { require(it in 1..65535) })
             "CHAT_SEND" -> ChatSend(value(2).validatedChatText())
             "CHAT_MESSAGE" -> ChatMessage(value(2).validatedToken(), value(3).validatedName(), value(4).validatedChatText(), value(5).toLong().also { require(it >= 0) })
+            "NOTIFY_OTHERS" -> NotifyOthers
+            "GROUP_ALERT" -> GroupAlert(value(2).validatedToken(), value(3).validatedName())
             "ERROR" -> Error(value(2).validatedReason())
             else -> error("Type de message inconnu.")
         }

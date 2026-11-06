@@ -55,6 +55,7 @@ fun TalkieWalkieApp(viewModel: TalkieWalkieViewModel) {
                 AppDestination.COMMUNICATION -> CommunicationScreen(
                     state = state,
                     onTransmissionToggle = viewModel::toggleTransmission,
+                    onNotifyGroup = viewModel::notifyGroup,
                     onChatDraftChange = viewModel::updateChatDraft,
                     onSendChat = viewModel::sendChatMessage,
                     onLeave = viewModel::leaveGroup

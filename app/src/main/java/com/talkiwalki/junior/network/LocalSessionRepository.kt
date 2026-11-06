@@ -3,7 +3,6 @@ package com.talkiwalki.junior.network
 import com.talkiwalki.junior.core.coroutines.DefaultDispatcherProvider
 import com.talkiwalki.junior.audio.UdpVoiceCodec
 import com.talkiwalki.junior.audio.UdpVoicePacket
-import com.talkiwalki.junior.audio.PttArbiter
 import com.talkiwalki.junior.core.coroutines.DispatcherProvider
 import com.talkiwalki.junior.domain.model.Participant
 import com.talkiwalki.junior.domain.model.ParticipantRole
@@ -60,6 +59,7 @@ data class SessionChatMessage(
     val text: String,
     val sentAtMillis: Long
 )
+data class SessionGroupAlert(val senderId: String, val senderName: String)
 
 /** Owns one local TCP session. It never performs service discovery or Internet I/O. */
 class LocalSessionRepository(
@@ -72,20 +72,19 @@ class LocalSessionRepository(
     val incomingAudio: SharedFlow<UdpVoicePacket> = incomingAudioFlow.asSharedFlow()
     private val incomingChatFlow = MutableSharedFlow<SessionChatMessage>(extraBufferCapacity = 64)
     val incomingChat: SharedFlow<SessionChatMessage> = incomingChatFlow.asSharedFlow()
+    private val incomingAlertFlow = MutableSharedFlow<SessionGroupAlert>(extraBufferCapacity = 16)
+    val incomingAlert: SharedFlow<SessionGroupAlert> = incomingAlertFlow.asSharedFlow()
     private val lock = Mutex()
     private val peerSlots = Semaphore(MAX_CLIENTS)
     private var server: ServerSocket? = null
     private var acceptJob: Job? = null
     private var heartbeatJob: Job? = null
-    private var pttExpiryJob: Job? = null
     private var clientSocket: Socket? = null
     private var clientWriter: BufferedWriter? = null
     private var clientReaderJob: Job? = null
     private var sessionId = ""
     private var isHost = false
     private val peers = linkedMapOf<String, Peer>()
-    private val pttArbiter = PttArbiter()
-    private var hostId = ""
     private var udpSocket: DatagramSocket? = null
     private var udpJob: Job? = null
     private var udpSendJob: Job? = null
@@ -104,11 +103,9 @@ class LocalSessionRepository(
             isHost = true
             sessionId = UUID.randomUUID().toString()
             val host = Participant("host-$sessionId", nickname, ParticipantRole.HOST)
-            hostId = host.id
             stateFlow.value = LocalSessionState(groupName, LocalNetworkInfo.localIpv4Address(), socket.localPort, listOf(host), selfId = host.id, isHost = true)
             startUdp(UDP_PORT, null)
             acceptJob = scope.launch { acceptLoop(socket) }
-            startPttExpiryMonitor()
         }
     }.onFailure { fail("Impossible de démarrer le groupe : ${it.userMessage()}") }
 
@@ -119,7 +116,7 @@ class LocalSessionRepository(
         withContext(dispatchers.io) {
             val socket = Socket()
             socket.connect(InetSocketAddress(address, port), CONNECT_TIMEOUT_MS)
-            socket.soTimeout = READ_TIMEOUT_MS
+            socket.soTimeout = JOIN_TIMEOUT_MS
             clientSocket = socket
             clientWriter = writer(socket)
             send(clientWriter!!, LocalProtocol.Join(nickname))
@@ -132,6 +129,10 @@ class LocalSessionRepository(
                     stateFlow.value = LocalSessionState(first.groupName, address, port, selfId = first.participantId)
                     startUdp(0, InetSocketAddress(address, UDP_PORT))
                     send(clientWriter!!, LocalProtocol.UdpRegister(udpSocket!!.localPort))
+                    // The initial handshake has a timeout, but an established group
+                    // may be quiet for more than 35 seconds. Heartbeats on the writer
+                    // detect an actually lost host without cancelling a silent group.
+                    socket.soTimeout = 0
                     clientReaderJob = scope.launch { clientReadLoop(socket, inputReader) }
                     startHeartbeat()
                 }
@@ -151,7 +152,6 @@ class LocalSessionRepository(
     suspend fun close() {
         lock.withLock {
             heartbeatJob?.cancel(); heartbeatJob = null
-            pttExpiryJob?.cancel(); pttExpiryJob = null
             clientReaderJob?.cancel(); clientReaderJob = null
             runCatching { clientWriter?.let { send(it, LocalProtocol.Leave) } }
             runCatching { clientSocket?.close() }; clientSocket = null; clientWriter = null
@@ -162,7 +162,7 @@ class LocalSessionRepository(
             udpSendJob?.cancel(); udpSendJob = null
             outgoingAudio?.close(); outgoingAudio = null
             runCatching { udpSocket?.close() }; udpSocket = null; udpPeers.clear(); udpHost = null
-            isHost = false; sessionId = ""; hostId = ""
+            isHost = false; sessionId = ""
             stateFlow.value = LocalSessionState()
         }
     }
@@ -196,7 +196,7 @@ class LocalSessionRepository(
     }
 
     private suspend fun handlePeer(socket: Socket) {
-        socket.soTimeout = READ_TIMEOUT_MS
+        socket.soTimeout = JOIN_TIMEOUT_MS
         val reader = reader(socket); val writer = writer(socket)
         try {
             val hello = read(reader)
@@ -209,14 +209,17 @@ class LocalSessionRepository(
                 send(writer, LocalProtocol.JoinAccepted(sessionId, stateFlow.value.groupName, id))
                 broadcastParticipants()
             }
+            // Only the initial JOIN is time-bound. An established local group may
+            // legitimately stay silent indefinitely.
+            socket.soTimeout = 0
             while (scope.isActive) {
                 when (val control = read(reader)) {
                     LocalProtocol.Leave -> break
                     LocalProtocol.Heartbeat -> peer.lastSeen = System.currentTimeMillis()
-                    LocalProtocol.PttRequest -> handlePttRequest(peer.id)
-                    LocalProtocol.PttRelease -> handlePttRelease(peer.id)
+                    LocalProtocol.PttRequest, LocalProtocol.PttRelease -> Unit
                     is LocalProtocol.UdpRegister -> udpPeers[peer.id] = InetSocketAddress(socket.inetAddress, control.port)
                     is LocalProtocol.ChatSend -> handleChatSend(peer, control.text)
+                    LocalProtocol.NotifyOthers -> handleNotifyOthers(peer)
                     else -> send(writer, LocalProtocol.Error("Message non autorisé."))
                 }
             }
@@ -224,9 +227,7 @@ class LocalSessionRepository(
             // Socket closure and malformed remote input both result in removing this peer.
         } finally {
             lock.withLock {
-                val disconnectedId = peers.entries.firstOrNull { it.value.socket == socket }?.key
                 peers.entries.removeIf { it.value.socket == socket }
-                if (disconnectedId != null && pttArbiter.disconnect(disconnectedId)) broadcastPttState()
                 broadcastParticipants()
             }
             runCatching { socket.close() }
@@ -238,10 +239,9 @@ class LocalSessionRepository(
             while (scope.isActive) when (val message = read(reader)) {
                 is LocalProtocol.ParticipantsUpdated -> stateFlow.value = stateFlow.value.copy(participants = message.participants.map { it.toParticipant() }, error = null)
                 is LocalProtocol.Error -> fail(message.reason)
-                is LocalProtocol.PttGranted -> stateFlow.value = stateFlow.value.copy(speakerId = message.speakerId)
-                is LocalProtocol.PttDenied -> stateFlow.value = stateFlow.value.copy(speakerId = message.speakerId)
-                is LocalProtocol.PttState -> stateFlow.value = stateFlow.value.copy(speakerId = message.speakerId)
+                is LocalProtocol.PttGranted, is LocalProtocol.PttDenied, is LocalProtocol.PttState -> Unit
                 is LocalProtocol.ChatMessage -> incomingChatFlow.tryEmit(message.toSessionChatMessage())
+                is LocalProtocol.GroupAlert -> incomingAlertFlow.tryEmit(SessionGroupAlert(message.senderId, message.senderName))
                 else -> Unit
             }
         } catch (_: Exception) {
@@ -266,7 +266,6 @@ class LocalSessionRepository(
     fun sendAudio(pcm: ByteArray) {
         val state = stateFlow.value; val id = state.selfId ?: return
         if (pcm.size > UdpVoiceCodec.MAX_PAYLOAD) return
-        if (state.speakerId != id || pcm.size > UdpVoiceCodec.MAX_PAYLOAD) return
         // A single sender keeps 20 ms frames ordered and prevents coroutine bursts
         // from overloading slower Wi-Fi drivers.
         outgoingAudio?.trySend(OutgoingAudio(id, state.isHost, pcm))
@@ -287,8 +286,7 @@ class LocalSessionRepository(
                 val wire = UdpVoiceCodec.encode(UdpVoicePacket(audio.speakerId, audioSequence++, audio.pcm))
                 runCatching {
                     if (audio.isHost) {
-                        val leaseIsActive = lock.withLock { pttArbiter.renew(audio.speakerId) }
-                        if (leaseIsActive) relayUdp(wire, audio.speakerId)
+                        relayUdp(wire, audio.speakerId)
                     } else {
                         udpHost?.let { socket.send(DatagramPacket(wire, wire.size, it)) }
                     }
@@ -304,10 +302,6 @@ class LocalSessionRepository(
                     if (isHost) {
                         val expected = udpPeers[voice.speakerId] ?: continue
                         if (expected.address != datagram.address || expected.port != datagram.port) continue
-                        val leaseIsActive = lock.withLock {
-                            pttArbiter.currentSpeaker() == voice.speakerId && pttArbiter.renew(voice.speakerId)
-                        }
-                        if (!leaseIsActive) continue
                         incomingAudioFlow.tryEmit(voice); relayUdp(datagram.data.copyOf(datagram.length), voice.speakerId)
                     } else if (datagram.address == host?.address && voice.speakerId != stateFlow.value.selfId) incomingAudioFlow.tryEmit(voice)
                 } catch (_: Exception) { if (!socket.isClosed) delay(20) }
@@ -315,45 +309,6 @@ class LocalSessionRepository(
         }
     }
     private fun relayUdp(bytes: ByteArray, sender: String) { val socket = udpSocket ?: return; udpPeers.filterKeys { it != sender }.values.forEach { target -> runCatching { socket.send(DatagramPacket(bytes, bytes.size, target)) } } }
-
-    /** Releases a turn which has received no audio frames for ten seconds. */
-    private fun startPttExpiryMonitor() {
-        pttExpiryJob?.cancel()
-        pttExpiryJob = scope.launch {
-            while (isActive && isHost) {
-                delay(PTT_EXPIRY_CHECK_MS)
-                lock.withLock {
-                    if (stateFlow.value.speakerId != pttArbiter.currentSpeaker()) broadcastPttState()
-                }
-            }
-        }
-    }
-
-    /**
-     * PTT writes to the TCP control socket. Keep the dispatcher boundary here so
-     * this method remains safe if a UI caller accidentally invokes it on Main.
-     */
-    suspend fun requestPtt(): Boolean = withContext(dispatchers.io) {
-        lock.withLock {
-            if (isHost) {
-                if (pttArbiter.request(hostId)) broadcastPttState()
-                stateFlow.value.speakerId == hostId
-            } else {
-                clientWriter?.let { send(it, LocalProtocol.PttRequest) }
-                false
-            }
-        }
-    }
-
-    suspend fun releasePtt() = withContext(dispatchers.io) {
-        lock.withLock {
-            if (isHost) {
-                if (pttArbiter.release(hostId)) broadcastPttState()
-            } else {
-                clientWriter?.let { send(it, LocalProtocol.PttRelease) }
-            }
-        }
-    }
 
     /** Sends only through the existing local group socket; nothing is persisted or sent to the Internet. */
     suspend fun sendChat(text: String): Result<Unit> = runCatching {
@@ -374,11 +329,21 @@ class LocalSessionRepository(
         }
     }
 
-    private suspend fun handlePttRequest(id: String) {
-        val granted = pttArbiter.request(id)
-        peers[id]?.let { send(it.writer, if (granted) LocalProtocol.PttGranted(id) else LocalProtocol.PttDenied(pttArbiter.currentSpeaker())) }
-        if (granted) broadcastPttState()
+    suspend fun notifyOthers(): Result<Unit> = runCatching {
+        withContext(dispatchers.io) {
+            lock.withLock {
+                val session = stateFlow.value
+                val selfId = session.selfId ?: error("Groupe indisponible.")
+                if (isHost) {
+                    val sender = session.participants.firstOrNull { it.id == selfId } ?: error("Participant introuvable.")
+                    broadcastAlert(SessionGroupAlert(selfId, sender.displayName))
+                } else {
+                    send(clientWriter ?: error("Groupe indisponible."), LocalProtocol.NotifyOthers)
+                }
+            }
+        }
     }
+
     private suspend fun handleChatSend(peer: Peer, text: String) {
         lock.withLock {
             broadcastChat(SessionChatMessage(peer.id, peer.name, text, System.currentTimeMillis()))
@@ -389,12 +354,13 @@ class LocalSessionRepository(
         val message = LocalProtocol.ChatMessage(chat.senderId, chat.senderName, chat.text, chat.sentAtMillis)
         peers.values.toList().forEach { peer -> runCatching { send(peer.writer, message) } }
     }
-    private suspend fun handlePttRelease(id: String) { if (pttArbiter.release(id)) broadcastPttState() }
-    private suspend fun broadcastPttState() {
-        val speaker = pttArbiter.currentSpeaker()
-        stateFlow.value = stateFlow.value.copy(speakerId = speaker)
-        val message = LocalProtocol.PttState(speaker)
-        peers.values.forEach { runCatching { send(it.writer, message) } }
+    private suspend fun handleNotifyOthers(peer: Peer) = lock.withLock {
+        broadcastAlert(SessionGroupAlert(peer.id, peer.name))
+    }
+    /** Alert sender never receives its own alert. */
+    private fun broadcastAlert(alert: SessionGroupAlert) {
+        val message = LocalProtocol.GroupAlert(alert.senderId, alert.senderName)
+        peers.filterKeys { it != alert.senderId }.values.forEach { peer -> runCatching { send(peer.writer, message) } }
     }
 
     private suspend fun broadcastParticipants() {
@@ -438,10 +404,9 @@ class LocalSessionRepository(
     private class Peer(val id: String, val name: String, val socket: Socket, val writer: BufferedWriter, var lastSeen: Long = System.currentTimeMillis()) { fun close() = runCatching { socket.close() } }
     private companion object {
         const val CONNECT_TIMEOUT_MS = 6_000
-        const val READ_TIMEOUT_MS = 35_000
+        const val JOIN_TIMEOUT_MS = 35_000
         const val HEARTBEAT_MS = 10_000L
         const val HOST_DISCONNECTED_MESSAGE = "L’hôte s’est déconnecté : le groupe a été annulé."
-        const val PTT_EXPIRY_CHECK_MS = 500L
         const val UDP_PORT = 49_322
         const val MAX_CLIENTS = 8
         const val UDP_BUFFER_BYTES = 64 * 1024
