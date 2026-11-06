@@ -11,6 +11,8 @@ import com.talkiwalki.junior.audio.PcmAudioEngine
 import com.talkiwalki.junior.audio.NoopSpeakerStartNotifier
 import com.talkiwalki.junior.audio.SpeakerStartDetector
 import com.talkiwalki.junior.audio.SpeakerStartNotifier
+import com.talkiwalki.junior.notification.GroupMessageNotifier
+import com.talkiwalki.junior.notification.NoopGroupMessageNotifier
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +27,8 @@ class TalkieWalkieViewModel(
     private val sessionRepository: LocalSessionRepository = LocalSessionRepository(),
     private val discovery: SessionDiscovery = NoopSessionDiscovery(),
     audioEngine: PcmAudioEngine = PcmAudioEngine(),
-    private val speakerStartNotifier: SpeakerStartNotifier = NoopSpeakerStartNotifier
+    private val speakerStartNotifier: SpeakerStartNotifier = NoopSpeakerStartNotifier,
+    private val messageNotifier: GroupMessageNotifier = NoopGroupMessageNotifier
 ) : ViewModel() {
     private val audioEngine = audioEngine
     private val speakerStartDetector = SpeakerStartDetector()
@@ -90,6 +93,9 @@ class TalkieWalkieViewModel(
         viewModelScope.launch { sessionRepository.incomingAudio.collect { audioEngine.play(it) } }
         viewModelScope.launch {
             sessionRepository.incomingChat.collect { message ->
+                val current = mutableUiState.value
+                val isMine = message.senderId == current.selfId
+                if (!isMine) messageNotifier.notifyIncomingMessage(current.groupName, message.senderName, message.text)
                 mutableUiState.update { current ->
                     current.copy(
                         chatMessages = (current.chatMessages + ChatMessageUi(
@@ -97,7 +103,7 @@ class TalkieWalkieViewModel(
                             senderName = message.senderName,
                             text = message.text,
                             sentAtMillis = message.sentAtMillis,
-                            isMine = message.senderId == current.selfId
+                            isMine = isMine
                         )).takeLast(MAX_SESSION_MESSAGES),
                         chatDraft = if (message.senderId == current.selfId) "" else current.chatDraft
                     )
