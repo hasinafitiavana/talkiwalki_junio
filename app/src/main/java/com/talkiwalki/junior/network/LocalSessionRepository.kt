@@ -32,6 +32,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -58,7 +60,7 @@ class LocalSessionRepository(
 ) {
     private val stateFlow = MutableStateFlow(LocalSessionState())
     val state: StateFlow<LocalSessionState> = stateFlow.asStateFlow()
-    private val incomingAudioFlow = MutableSharedFlow<UdpVoicePacket>(extraBufferCapacity = 16)
+    private val incomingAudioFlow = MutableSharedFlow<UdpVoicePacket>(extraBufferCapacity = 64)
     val incomingAudio: SharedFlow<UdpVoicePacket> = incomingAudioFlow.asSharedFlow()
     private val lock = Mutex()
     private val peerSlots = Semaphore(MAX_CLIENTS)
@@ -76,6 +78,8 @@ class LocalSessionRepository(
     private var hostId = ""
     private var udpSocket: DatagramSocket? = null
     private var udpJob: Job? = null
+    private var udpSendJob: Job? = null
+    private var outgoingAudio: Channel<OutgoingAudio>? = null
     private var udpHost: InetSocketAddress? = null
     private val udpPeers = linkedMapOf<String, InetSocketAddress>()
     private var audioSequence = 0
@@ -144,7 +148,10 @@ class LocalSessionRepository(
             acceptJob?.cancel(); acceptJob = null
             runCatching { server?.close() }; server = null
             peers.values.forEach { it.close() }; peers.clear()
-            udpJob?.cancel(); udpJob = null; runCatching { udpSocket?.close() }; udpSocket = null; udpPeers.clear(); udpHost = null
+            udpJob?.cancel(); udpJob = null
+            udpSendJob?.cancel(); udpSendJob = null
+            outgoingAudio?.close(); outgoingAudio = null
+            runCatching { udpSocket?.close() }; udpSocket = null; udpPeers.clear(); udpHost = null
             isHost = false; sessionId = ""; hostId = ""
             stateFlow.value = LocalSessionState()
         }
@@ -248,27 +255,34 @@ class LocalSessionRepository(
         val state = stateFlow.value; val id = state.selfId ?: return
         if (pcm.size > UdpVoiceCodec.MAX_PAYLOAD) return
         if (state.speakerId != id || pcm.size > UdpVoiceCodec.MAX_PAYLOAD) return
-        val wire = UdpVoiceCodec.encode(UdpVoicePacket(id, audioSequence++, pcm))
-        val socket = udpSocket ?: return
-        scope.launch {
-            runCatching {
-                if (state.isHost) {
-                    val leaseIsActive = lock.withLock { pttArbiter.renew(id) }
-                    if (leaseIsActive) relayUdp(wire, id)
-                } else {
-                    udpHost?.let { socket.send(DatagramPacket(wire, wire.size, it)) }
-                }
-            }
-        }
+        // A single sender keeps 20 ms frames ordered and prevents coroutine bursts
+        // from overloading slower Wi-Fi drivers.
+        outgoingAudio?.trySend(OutgoingAudio(id, state.isHost, pcm))
     }
 
     private fun startUdp(port: Int, host: InetSocketAddress?) {
-        udpSocket?.close(); udpHost = host
+        udpJob?.cancel(); udpSendJob?.cancel(); outgoingAudio?.close(); udpSocket?.close(); udpHost = host
         val socket = DatagramSocket(port).apply {
             receiveBufferSize = UDP_BUFFER_BYTES
             sendBufferSize = UDP_BUFFER_BYTES
         }
         udpSocket = socket
+        audioSequence = 0
+        val sender = Channel<OutgoingAudio>(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        outgoingAudio = sender
+        udpSendJob = scope.launch {
+            for (audio in sender) {
+                val wire = UdpVoiceCodec.encode(UdpVoicePacket(audio.speakerId, audioSequence++, audio.pcm))
+                runCatching {
+                    if (audio.isHost) {
+                        val leaseIsActive = lock.withLock { pttArbiter.renew(audio.speakerId) }
+                        if (leaseIsActive) relayUdp(wire, audio.speakerId)
+                    } else {
+                        udpHost?.let { socket.send(DatagramPacket(wire, wire.size, it)) }
+                    }
+                }
+            }
+        }
         udpJob = scope.launch {
             val buffer = ByteArray(1_300)
             while (isActive && !socket.isClosed) {
@@ -378,6 +392,7 @@ class LocalSessionRepository(
     private fun WireParticipant.toParticipant() = Participant(id, name, if (isHost) ParticipantRole.HOST else ParticipantRole.PARTICIPANT)
     private fun Throwable.userMessage() = message?.take(120) ?: "erreur réseau"
 
+    private data class OutgoingAudio(val speakerId: String, val isHost: Boolean, val pcm: ByteArray)
     private class Peer(val id: String, val name: String, val socket: Socket, val writer: BufferedWriter, var lastSeen: Long = System.currentTimeMillis()) { fun close() = runCatching { socket.close() } }
     private companion object {
         const val CONNECT_TIMEOUT_MS = 6_000

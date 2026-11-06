@@ -14,6 +14,10 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -25,6 +29,8 @@ class PcmAudioEngine(
     private var recorder: AudioRecord? = null
     private var captureJob: Job? = null
     private var player: AudioTrack? = null
+    private val playbackPackets = Channel<UdpVoicePacket>(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private var playbackJob: Job? = null
     private val audioManager = context?.getSystemService(AudioManager::class.java)
     private var previousAudioMode: Int? = null
     private var audioRouteConfigured = false
@@ -42,21 +48,24 @@ class PcmAudioEngine(
         recorder = record; record.startRecording()
         captureJob = scope.launch {
             val buffer = ByteArray(FRAME_BYTES)
+            val voiceGate = VoiceActivityGate()
             while (isActive && recorder === record) {
                 val count = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                 if (count <= 0) break
                 val frame = buffer.copyOf(count)
-                if (VoiceActivityDetector.hasVoice(frame)) onFrame(frame)
+                if (voiceGate.shouldSend(frame)) onFrame(frame)
             }
         }
     }
 
     fun stopCapture() { captureJob?.cancel(); captureJob = null; recorder?.let { runCatching { it.stop() }; it.release() }; recorder = null }
-    fun play(frame: ByteArray) {
-        writeToSpeaker(frame)
+    fun play(packet: UdpVoicePacket) {
+        if (packet.pcm.isNotEmpty()) playbackPackets.trySend(packet)
+        if (playbackJob?.isActive != true) playbackJob = scope.launch { playbackLoop() }
     }
     fun release() {
         stopCapture()
+        playbackJob?.cancel(); playbackJob = null
         player?.let { runCatching { it.stop() }; it.release() }
         player = null
         restoreAudioRoute()
@@ -88,6 +97,28 @@ class PcmAudioEngine(
         previousAudioMode = null
         audioRouteConfigured = false
     }
+    private suspend fun playbackLoop() {
+        while (currentCoroutineContext().isActive) {
+            val firstPacket = playbackPackets.receiveCatching().getOrNull() ?: break
+            val jitterBuffer = VoiceJitterBuffer(FRAME_BYTES)
+            jitterBuffer.offer(firstPacket)
+
+            // Hold three 20 ms packets before playback to absorb normal Wi-Fi jitter.
+            delay(JITTER_DELAY_MS)
+            var consecutiveMissingFrames = 0
+            while (currentCoroutineContext().isActive && consecutiveMissingFrames < MAX_MISSING_FRAMES) {
+                while (true) {
+                    val packet = playbackPackets.tryReceive().getOrNull() ?: break
+                    jitterBuffer.offer(packet)
+                }
+                val frame = jitterBuffer.nextFrame()
+                if (frame.all { it == 0.toByte() }) consecutiveMissingFrames++ else consecutiveMissingFrames = 0
+                writeToSpeaker(frame)
+                delay(FRAME_DURATION_MS)
+            }
+        }
+    }
+
     private fun createPlayer(): AudioTrack {
         val min = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_OUT, ENCODING)
         return AudioTrack.Builder().setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()).setAudioFormat(AudioFormat.Builder().setSampleRate(SAMPLE_RATE).setEncoding(ENCODING).setChannelMask(CHANNEL_OUT).build()).setBufferSizeInBytes(maxOf(min * 2, FRAME_BYTES * 6)).setTransferMode(AudioTrack.MODE_STREAM).build()
@@ -97,12 +128,17 @@ class PcmAudioEngine(
         routeToSpeaker()
         val track = player ?: createPlayer().also { player = it }
         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
-        track.write(frame, 0, frame.size, AudioTrack.WRITE_NON_BLOCKING)
+        // Non-blocking writes silently discarded samples when a slower audio driver
+        // temporarily filled its queue. A dedicated IO coroutine makes blocking safe.
+        track.write(frame, 0, frame.size, AudioTrack.WRITE_BLOCKING)
     }
 
     companion object {
         const val SAMPLE_RATE = 16_000
         const val FRAME_BYTES = 640
+        private const val FRAME_DURATION_MS = 20L
+        private const val JITTER_DELAY_MS = 60L
+        private const val MAX_MISSING_FRAMES = 25
         private const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT

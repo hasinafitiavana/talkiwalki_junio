@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -83,7 +84,7 @@ class TalkieWalkieViewModel(
                 if (canTransmit) audioEngine.startCapture(sessionRepository::sendAudio) else audioEngine.stopCapture()
             }
         }
-        viewModelScope.launch { sessionRepository.incomingAudio.collectLatest { audioEngine.play(it.pcm) } }
+        viewModelScope.launch { sessionRepository.incomingAudio.collect { audioEngine.play(it) } }
         viewModelScope.launch {
             discovery.snapshot.collectLatest { snapshot ->
                 mutableUiState.update { it.copy(discoveredGroups = snapshot.groups, isDiscovering = snapshot.isSearching, isResolvingGroup = snapshot.resolvingCount > 0, errorMessage = snapshot.error ?: it.errorMessage) }
