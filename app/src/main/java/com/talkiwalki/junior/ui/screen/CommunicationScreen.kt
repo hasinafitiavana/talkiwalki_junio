@@ -23,6 +23,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.OutlinedTextField
@@ -34,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -68,6 +71,14 @@ fun CommunicationScreen(
     onLeave: () -> Unit
 ) {
     var isChatOpen by remember { mutableStateOf(false) }
+    var unreadMessages by remember { mutableIntStateOf(0) }
+    var lastObservedMessageId by remember { mutableStateOf<String?>(null) }
+    val newestMessage = state.chatMessages.lastOrNull()
+    LaunchedEffect(newestMessage?.id) {
+        val message = newestMessage ?: return@LaunchedEffect
+        if (lastObservedMessageId != null && !isChatOpen && !message.isMine) unreadMessages++
+        lastObservedMessageId = message.id
+    }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).widthIn(max = 560.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(state.groupName, style = MaterialTheme.typography.headlineMedium)
@@ -99,12 +110,18 @@ fun CommunicationScreen(
         Spacer(Modifier.height(24.dp))
         Button(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("Quitter le groupe") }
         }
-        FloatingActionButton(
-            onClick = { isChatOpen = true },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp),
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary
-        ) { Text("💬") }
+        BadgedBox(
+            badge = {
+                if (unreadMessages > 0) Badge { Text(if (unreadMessages > 9) "9+" else unreadMessages.toString()) }
+            },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp)
+        ) {
+            FloatingActionButton(
+                onClick = { isChatOpen = true; unreadMessages = 0 },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
+            ) { Text("💬") }
+        }
     }
     if (isChatOpen) {
         ChatDialog(
